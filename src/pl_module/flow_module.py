@@ -3057,21 +3057,22 @@ class LitModel_flow(LitModel):
 
         if num_timesteps == 1:
             dptb_style_aliases = {
-                "onsite_loss": f"{prefix}_onsite_loss",
-                "hopping_loss": f"{prefix}_hopping_loss",
+                "onsite_loss": (f"{prefix}/onsite_loss", f"{prefix}_onsite_loss"),
+                "hopping_loss": (f"{prefix}/hopping_loss", f"{prefix}_hopping_loss"),
             }
-            for key, log_name in dptb_style_aliases.items():
+            for key, log_names in dptb_style_aliases.items():
                 if key not in metrics:
                     continue
-                self.log(
-                    log_name,
-                    metrics[key],
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=False,
-                    sync_dist=True,
-                    batch_size=self.cur_batch_size,
-                )
+                for log_name in log_names:
+                    self.log(
+                        log_name,
+                        metrics[key],
+                        on_step=False,
+                        on_epoch=True,
+                        prog_bar=False,
+                        sync_dist=True,
+                        batch_size=self.cur_batch_size,
+                    )
 
     def _log_sample_metric_qh9_mul(self, batch_one, prefix, num_timesteps=1, post_fix="", mul=5):
         """
