@@ -82,6 +82,38 @@ def test_component_losses_skip_non_block_outputs():
 
 
 def test_validation_logger_emits_dptb_style_aliases_for_euler_one():
+    outputs, target, recorder = _make_logger_inputs()
+
+    LitModel_flow._log_dptb_compatible_component_losses(recorder, outputs, target, "val", 1, "_1")
+
+    record_by_name = {name: kwargs for name, _value, kwargs in recorder.records}
+    assert "val_onsite_loss" in record_by_name
+    assert "val_hopping_loss" in record_by_name
+    assert "val/dptb_compatible_onsite_loss_euler1" in record_by_name
+    assert "val/dptb_compatible_hopping_loss_euler1" in record_by_name
+    assert record_by_name["val_onsite_loss"]["on_step"] is False
+    assert record_by_name["val_onsite_loss"]["on_epoch"] is True
+    assert record_by_name["val_hopping_loss"]["on_step"] is False
+    assert record_by_name["val_hopping_loss"]["on_epoch"] is True
+
+
+def test_test_logger_emits_dptb_style_aliases_for_euler_one():
+    outputs, target, recorder = _make_logger_inputs()
+
+    LitModel_flow._log_dptb_compatible_component_losses(recorder, outputs, target, "test", 1, "_1")
+
+    record_by_name = {name: kwargs for name, _value, kwargs in recorder.records}
+    assert "test_onsite_loss" in record_by_name
+    assert "test_hopping_loss" in record_by_name
+    assert "test/dptb_compatible_onsite_loss_euler1" in record_by_name
+    assert "test/dptb_compatible_hopping_loss_euler1" in record_by_name
+    assert record_by_name["test_onsite_loss"]["on_step"] is False
+    assert record_by_name["test_onsite_loss"]["on_epoch"] is True
+    assert record_by_name["test_hopping_loss"]["on_step"] is False
+    assert record_by_name["test_hopping_loss"]["on_epoch"] is True
+
+
+def _make_logger_inputs():
     class Recorder:
         dptb_compatible_monitor = True
         dptb_compatible_monitor_steps = [1]
@@ -103,16 +135,4 @@ def test_validation_logger_emits_dptb_style_aliases_for_euler_one():
         non_diagonal_hamiltonian=torch.zeros(1, 2, 2),
         non_diagonal_hamiltonian_mask=torch.ones(1, 2, 2),
     )
-    recorder = Recorder()
-
-    LitModel_flow._log_dptb_compatible_component_losses(recorder, outputs, target, "val", 1, "_1")
-
-    record_by_name = {name: kwargs for name, _value, kwargs in recorder.records}
-    assert "val_onsite_loss" in record_by_name
-    assert "val_hopping_loss" in record_by_name
-    assert "val/dptb_compatible_onsite_loss_euler1" in record_by_name
-    assert "val/dptb_compatible_hopping_loss_euler1" in record_by_name
-    assert record_by_name["val_onsite_loss"]["on_step"] is False
-    assert record_by_name["val_onsite_loss"]["on_epoch"] is True
-    assert record_by_name["val_hopping_loss"]["on_step"] is False
-    assert record_by_name["val_hopping_loss"]["on_epoch"] is True
+    return outputs, target, Recorder()

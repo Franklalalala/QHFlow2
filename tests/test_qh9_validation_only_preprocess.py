@@ -42,6 +42,21 @@ def test_validation_only_index_is_dense_for_loader_get():
     assert preprocess.dense_index_entries(3) == [(0, 0, 0), (0, 1, 1), (0, 2, 2)]
 
 
+def test_subset_indices_can_select_test_only():
+    train_mask = np.array([0, 1])
+    val_mask = np.array([2])
+    test_mask = np.array([3, 4])
+
+    selected = preprocess.select_subset_indices(train_mask, val_mask, test_mask, "test")
+
+    assert selected.tolist() == [3, 4]
+
+
+def test_default_output_folder_names_subset():
+    assert preprocess.default_output_folder(Path("/data"), "QH9Stable", "val") == Path("/data/QH9Stable_val_only")
+    assert preprocess.default_output_folder(Path("/data"), "QH9Stable", "test") == Path("/data/QH9Stable_test_only")
+
+
 def test_split_file_name_is_loader_compatible():
     assert preprocess.split_file_name("QH9Stable", "random") == "processed_QH9Stable_random_12.json"
     assert preprocess.split_file_name("QH9Stable", "size_ood") == "processed_QH9Stable_size_ood.json"

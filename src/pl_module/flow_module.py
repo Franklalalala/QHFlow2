@@ -3022,7 +3022,7 @@ class LitModel_flow(LitModel):
             logger.error(f"Error trace: {traceback.format_exc()}")
 
     def _log_dptb_compatible_component_losses(self, sample, batch_one, prefix, num_timesteps, post_fix):
-        if not self.dptb_compatible_monitor or prefix != "val":
+        if not self.dptb_compatible_monitor or prefix not in {"val", "test"}:
             return
         if num_timesteps not in self.dptb_compatible_monitor_steps:
             return

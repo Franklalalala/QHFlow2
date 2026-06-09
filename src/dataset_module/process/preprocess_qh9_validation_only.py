@@ -50,8 +50,21 @@ def dense_index_entries(num_items: int) -> list[tuple[int, int, int]]:
     return [(0, dense_idx, dense_idx) for dense_idx in range(num_items)]
 
 
-def default_output_folder(root: Path, dataset_name: str) -> Path:
-    return root / f"{dataset_name}_val_only"
+def select_subset_indices(
+    train_mask: np.ndarray,
+    val_mask: np.ndarray,
+    test_mask: np.ndarray,
+    subset: str,
+) -> np.ndarray:
+    if subset == "val":
+        return val_mask
+    if subset == "test":
+        return test_mask
+    raise ValueError(f"Unsupported subset: {subset}")
+
+
+def default_output_folder(root: Path, dataset_name: str, subset: str) -> Path:
+    return root / f"{dataset_name}_{subset}_only"
 
 
 def resolve_raw_db(root: Path, dataset_name: str, raw_db: str | None) -> Path:
@@ -132,20 +145,28 @@ def preprocess_validation_only(args: argparse.Namespace) -> None:
 
     root = Path(args.root).expanduser().resolve()
     raw_db = resolve_raw_db(root, args.dataset_name, args.raw_db)
-    output_folder = Path(args.output_folder).expanduser().resolve() if args.output_folder else default_output_folder(root, args.dataset_name)
+    output_folder = (
+        Path(args.output_folder).expanduser().resolve()
+        if args.output_folder
+        else default_output_folder(root, args.dataset_name, args.subset)
+    )
     processed_dir = output_folder / "processed"
 
     train_mask, val_mask, test_mask = load_split_masks(raw_db, args.split)
-    if args.max_val_samples is not None:
-        val_mask = val_mask[: args.max_val_samples]
+    subset_mask = select_subset_indices(train_mask, val_mask, test_mask, args.subset)
+    max_samples = args.max_samples if args.max_samples is not None else args.max_val_samples
+    if max_samples is not None:
+        subset_mask = subset_mask[:max_samples]
 
     if args.dry_run:
         print(f"RAW_DB {raw_db}")
         print(f"OUTPUT_FOLDER {output_folder}")
         print(f"SPLIT {args.split}")
+        print(f"SUBSET {args.subset}")
         print(f"TRAIN_COUNT {len(train_mask)}")
         print(f"VAL_COUNT {len(val_mask)}")
         print(f"TEST_COUNT {len(test_mask)}")
+        print(f"SELECTED_COUNT {len(subset_mask)}")
         print("DRY_RUN true")
         return
 
@@ -162,32 +183,34 @@ def preprocess_validation_only(args: argparse.Namespace) -> None:
         make_split_info=False,
     )
 
-    map_size = max(int(args.map_size_gb * (1024**3)), max(1, len(val_mask)) * 30 * 1024 * 1024 * 3)
+    map_size = max(int(args.map_size_gb * (1024**3)), max(1, len(subset_mask)) * 30 * 1024 * 1024 * 3)
     env = lmdb.open(str(in_process_dir), map_size=map_size)
-    original_indices = [int(idx) for idx in val_mask.tolist()]
+    original_indices = [int(idx) for idx in subset_mask.tolist()]
     with sqlite3.connect(str(raw_db)) as conn:
         table_name = first_table_name(conn)
         with env.begin(write=True) as txn:
-            for dense_idx, original_idx in enumerate(tqdm(original_indices, desc="Processing validation rows")):
+            for dense_idx, original_idx in enumerate(tqdm(original_indices, desc=f"Processing {args.subset} rows")):
                 row = fetch_row_by_offset(conn, table_name, original_idx)
                 key, value = processor.process_data((row, dense_idx))
                 txn.put(key, value)
     env.close()
     os.rename(in_process_dir, shard_dir)
 
-    dense_val = list(range(len(original_indices)))
+    dense_indices = list(range(len(original_indices)))
     split_payload = {
         "train": [],
-        "val": dense_val,
-        "test": [],
+        "val": dense_indices if args.subset == "val" else [],
+        "test": dense_indices if args.subset == "test" else [],
         "source_split": args.split,
         "source_dataset": args.dataset_name,
-        "is_validation_only": True,
+        "subset": args.subset,
+        "is_validation_only": args.subset == "val",
+        "is_test_only": args.subset == "test",
     }
     write_json(processed_dir / split_file_name(args.dataset_name, args.split), split_payload)
     write_json(processed_dir / "index.json", {"index": dense_index_entries(len(original_indices))})
     write_json(shard_dir / "single_index.json", {"index": dense_index_entries(len(original_indices))})
-    write_json(processed_dir / "val_original_indices.json", {"indices": original_indices})
+    write_json(processed_dir / f"{args.subset}_original_indices.json", {"indices": original_indices})
     write_json(
         processed_dir / "shard_completion_status.json",
         {
@@ -197,9 +220,9 @@ def preprocess_validation_only(args: argparse.Namespace) -> None:
             "all_completed": True,
         },
     )
-    (processed_dir / "ALL_SHARDS_COMPLETED.txt").write_text("validation-only preprocessing complete\n", encoding="utf-8")
+    (processed_dir / "ALL_SHARDS_COMPLETED.txt").write_text(f"{args.subset}-only preprocessing complete\n", encoding="utf-8")
     (processed_dir / "db_info.txt").write_text(
-        f"source_raw_db: {raw_db}\nsource_split: {args.split}\nvalidation_rows: {len(original_indices)}\n",
+        f"source_raw_db: {raw_db}\nsource_split: {args.split}\nsubset: {args.subset}\nsubset_rows: {len(original_indices)}\n",
         encoding="utf-8",
     )
     write_json(
@@ -207,14 +230,15 @@ def preprocess_validation_only(args: argparse.Namespace) -> None:
         {
             "dataset_name": args.dataset_name,
             "split": args.split,
+            "subset": args.subset,
             "raw_db": str(raw_db),
             "output_folder": str(output_folder),
             "processed_dir": str(processed_dir),
             "shard_num": 1,
             "prefix_for_loader": output_folder.name.removeprefix(args.dataset_name),
-            "val_count": len(original_indices),
-            "key_space": "dense_validation_indices",
-            "original_indices_file": "val_original_indices.json",
+            "subset_count": len(original_indices),
+            "key_space": f"dense_{args.subset}_indices",
+            "original_indices_file": f"{args.subset}_original_indices.json",
             "load_example": (
                 "QH9Stable(root='<dataset_root>', split='"
                 + args.split
@@ -225,22 +249,25 @@ def preprocess_validation_only(args: argparse.Namespace) -> None:
         },
     )
 
-    print("VAL_ONLY_PREPROCESS_OK")
+    print(f"{args.subset.upper()}_ONLY_PREPROCESS_OK")
     print(f"RAW_DB {raw_db}")
     print(f"OUTPUT_FOLDER {output_folder}")
     print(f"PROCESSED_DIR {processed_dir}")
-    print(f"VAL_COUNT {len(original_indices)}")
+    print(f"SUBSET {args.subset}")
+    print(f"SELECTED_COUNT {len(original_indices)}")
     print(f"SHARD_DIR {shard_dir}")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Preprocess only QH9 validation rows into a val-only LMDB.")
+    parser = argparse.ArgumentParser(description="Preprocess only QH9 validation or test rows into a subset-only LMDB.")
     parser.add_argument("--root", default=str(SRC_ROOT.parent / "dataset"), help="QHFlow2 dataset root")
     parser.add_argument("--dataset-name", default="QH9Stable", choices=["QH9Stable"])
     parser.add_argument("--split", default="random", choices=["random", "size_ood"])
+    parser.add_argument("--subset", default="val", choices=["val", "test"])
     parser.add_argument("--raw-db", default=None, help="Path to QH9Stable.db. Auto-detected from --root when omitted.")
-    parser.add_argument("--output-folder", default=None, help="Output dataset folder. Default: <root>/QH9Stable_val_only")
-    parser.add_argument("--max-val-samples", type=int, default=None, help="Optional cap for quick smoke preprocessing")
+    parser.add_argument("--output-folder", default=None, help="Output dataset folder. Default: <root>/QH9Stable_<subset>_only")
+    parser.add_argument("--max-samples", type=int, default=None, help="Optional cap for quick smoke preprocessing")
+    parser.add_argument("--max-val-samples", type=int, default=None, help="Deprecated alias for --max-samples")
     parser.add_argument("--map-size-gb", type=float, default=16.0)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
