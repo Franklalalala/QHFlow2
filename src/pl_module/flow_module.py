@@ -260,15 +260,15 @@ class LitModel_flow(LitModel):
         assert type(self.log_n_steps_ODE_test) in [list, tuple, set, None]
         assert type(self.log_n_steps_ODE_val) in [list, tuple, set, None]
         self.log_n_steps_ODE_val = list(self.log_n_steps_ODE_val or [])
+        self.log_n_steps_ODE_test = list(self.log_n_steps_ODE_test or [])
         self.dptb_compatible_monitor = conf.flow.get("dptb_compatible_monitor", True)
         self.dptb_compatible_monitor_steps = conf.flow.get("dptb_compatible_monitor_steps", [1])
         if isinstance(self.dptb_compatible_monitor_steps, int):
             self.dptb_compatible_monitor_steps = [self.dptb_compatible_monitor_steps]
         self.dptb_compatible_monitor_steps = list(self.dptb_compatible_monitor_steps or [])
         if self.dptb_compatible_monitor:
-            for n_steps in self.dptb_compatible_monitor_steps:
-                if n_steps not in self.log_n_steps_ODE_val:
-                    self.log_n_steps_ODE_val.append(n_steps)
+            self._ensure_sample_metric_steps(self.log_n_steps_ODE_val, self.dptb_compatible_monitor_steps)
+            self._ensure_sample_metric_steps(self.log_n_steps_ODE_test, self.dptb_compatible_monitor_steps)
         
         # Setup convention dictionary
         self.convention_dict = convention_dict
@@ -2341,6 +2341,13 @@ class LitModel_flow(LitModel):
         return None
 
     @staticmethod
+    def _ensure_sample_metric_steps(log_steps, required_steps):
+        """Append required ODE sample steps once, preserving existing order."""
+        for n_steps in required_steps or []:
+            if n_steps not in log_steps:
+                log_steps.append(n_steps)
+
+    @staticmethod
     def _unique_sample_metric_steps(log_steps, default_step):
         plan = []
         seen = set()
@@ -3035,6 +3042,45 @@ class LitModel_flow(LitModel):
             import traceback
             logger.error(f"Error trace: {traceback.format_exc()}")
 
+    @staticmethod
+    def _dptb_canonical_prefix(prefix):
+        return "validation" if prefix == "val" else "test"
+
+    @classmethod
+    def _dptb_component_epoch_aliases(cls, prefix, key, num_timesteps):
+        if key not in {"onsite_loss", "hopping_loss"}:
+            return ()
+        canonical_prefix = cls._dptb_canonical_prefix(prefix)
+        aliases = [(f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch", 1)]
+        if num_timesteps == 1:
+            aliases.extend(
+                (
+                    (f"{prefix}/{key}", None),
+                    (f"{prefix}_{key}", None),
+                    (f"{canonical_prefix}_{key}_mean/epoch", 1),
+                )
+            )
+        return aliases
+
+    def _log_dptb_compatible_scalar(
+        self,
+        name,
+        value,
+        *,
+        on_step=False,
+        on_epoch=True,
+        batch_size=None,
+    ):
+        self.log(
+            name,
+            value,
+            on_step=on_step,
+            on_epoch=on_epoch,
+            prog_bar=False,
+            sync_dist=True,
+            batch_size=self.cur_batch_size if batch_size is None else batch_size,
+        )
+
     def _log_dptb_compatible_component_losses(self, sample, batch_one, prefix, num_timesteps, post_fix):
         if not self.dptb_compatible_monitor or prefix not in {"val", "test"}:
             return
@@ -3043,63 +3089,23 @@ class LitModel_flow(LitModel):
         if post_fix != f"_{num_timesteps}":
             return
 
-        canonical_prefix = "validation" if prefix == "val" else "test"
-
-        def _log_metric(name, value, *, on_step, on_epoch, batch_size):
-            self.log(
-                name,
-                value,
-                on_step=on_step,
-                on_epoch=on_epoch,
-                prog_bar=False,
-                sync_dist=True,
-                batch_size=batch_size,
-            )
-
         metrics = compute_dptb_compatible_component_losses(sample, batch_one)
         for key, value in metrics.items():
-            _log_metric(
+            LitModel_flow._log_dptb_compatible_scalar(
+                self,
                 f"{prefix}/dptb_compatible_{key}_euler{num_timesteps}",
                 value,
                 on_step=True,
                 on_epoch=True,
-                batch_size=self.cur_batch_size,
             )
-            if key in {"onsite_loss", "hopping_loss"}:
-                _log_metric(
-                    f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch",
+            for alias, batch_size in LitModel_flow._dptb_component_epoch_aliases(
+                prefix, key, num_timesteps
+            ):
+                LitModel_flow._log_dptb_compatible_scalar(
+                    self,
+                    alias,
                     value,
-                    on_step=False,
-                    on_epoch=True,
-                    batch_size=1,
-                )
-
-        if num_timesteps == 1:
-            dptb_style_aliases = {
-                "onsite_loss": (f"{prefix}/onsite_loss", f"{prefix}_onsite_loss"),
-                "hopping_loss": (f"{prefix}/hopping_loss", f"{prefix}_hopping_loss"),
-            }
-            canonical_aliases = {
-                "onsite_loss": f"{canonical_prefix}_onsite_loss_mean/epoch",
-                "hopping_loss": f"{canonical_prefix}_hopping_loss_mean/epoch",
-            }
-            for key, log_names in dptb_style_aliases.items():
-                if key not in metrics:
-                    continue
-                for log_name in log_names:
-                    _log_metric(
-                        log_name,
-                        metrics[key],
-                        on_step=False,
-                        on_epoch=True,
-                        batch_size=self.cur_batch_size,
-                    )
-                _log_metric(
-                    canonical_aliases[key],
-                    metrics[key],
-                    on_step=False,
-                    on_epoch=True,
-                    batch_size=1,
+                    batch_size=batch_size,
                 )
 
     def _log_sample_metric_qh9_mul(self, batch_one, prefix, num_timesteps=1, post_fix="", mul=5):

@@ -99,6 +99,17 @@ def test_validation_sample_plan_keeps_only_one_euler_one_forward():
     assert LitModel_flow._unique_sample_metric_steps([1, 3], 1) == [(1, "_1"), (3, "_3")]
 
 
+def test_dptb_monitor_steps_are_sampled_for_validation_and_test():
+    val_steps = []
+    test_steps = [2]
+
+    LitModel_flow._ensure_sample_metric_steps(val_steps, [1, 3])
+    LitModel_flow._ensure_sample_metric_steps(test_steps, [1, 2])
+
+    assert val_steps == [1, 3]
+    assert test_steps == [2, 1]
+
+
 def test_validation_logger_emits_dptb_style_aliases_for_euler_one():
     outputs, target, recorder = _make_logger_inputs()
 
