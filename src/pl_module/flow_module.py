@@ -2333,11 +2333,25 @@ class LitModel_flow(LitModel):
         
         # Conditional sampling evaluation
         if self.error_threshold is None or loss < self.error_threshold:
-            for n_steps in self.log_n_steps_ODE_val:
-                self._log_sample_metric(batch_one, "val", num_timesteps=n_steps, post_fix=f"_{n_steps}")
-            self._log_sample_metric(batch_one, "val", num_timesteps=self.num_ode_steps_val)
+            for n_steps, post_fix in self._unique_sample_metric_steps(
+                self.log_n_steps_ODE_val, self.num_ode_steps_val
+            ):
+                self._log_sample_metric(batch_one, "val", num_timesteps=n_steps, post_fix=post_fix)
             
         return None
+
+    @staticmethod
+    def _unique_sample_metric_steps(log_steps, default_step):
+        plan = []
+        seen = set()
+        for n_steps in log_steps or []:
+            if n_steps in seen:
+                continue
+            seen.add(n_steps)
+            plan.append((n_steps, f"_{n_steps}"))
+        if default_step not in seen:
+            plan.append((default_step, ""))
+        return plan
 
     def test_step(self, batch, batch_idx):
         """

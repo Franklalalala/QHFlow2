@@ -96,9 +96,17 @@ def main(conf):
         wandb_logger = setup_wandb_logger(conf, output_dir)
         wandb_logger.watch(model=lit_model, log_freq=500)
 
+        from pytorch_lightning.loggers import TensorBoardLogger
+
+        tensorboard_logger = TensorBoardLogger(
+            save_dir=str(output_dir),
+            name="tensorboard",
+            version="",
+        )
+
         # Setup callbacks and trainer
         callbacks = setup_callbacks(conf, output_dir)
-        trainer = setup_trainer(conf, callbacks, [wandb_logger], output_dir)
+        trainer = setup_trainer(conf, callbacks, [wandb_logger, tensorboard_logger], output_dir)
         log_training_config(conf)
 
         if conf.model.version.lower() == "Real_QHNet".lower() and ckpt_path is None and mode == "train":

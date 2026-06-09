@@ -202,12 +202,14 @@ class MD17_DFT_Shard(InMemoryDataset):
         all_features=False,
         functional="pbe",
         basis="def2svp",
+        compute_q_tensor=True,
     ):
         self.name = name
         self.folder = os.path.join(root, self.name + prefix)
         self.processd_dir_name = "processed"
         self.shard_dir_name = "lmdbs"
         self._processed_path = os.path.join(self.folder, self.processd_dir_name)
+        self._db_envs = {}  # Cache for LMDB environments by shard index
 
         self.shard_num = shard_num
         if self.shard_num == -1:
@@ -225,6 +227,7 @@ class MD17_DFT_Shard(InMemoryDataset):
         self.use_parallel_preprocess = use_parallel_preprocess
         self.split = split
         self.all_features = all_features
+        self.compute_q_tensor = compute_q_tensor
                 
         self.lmdb_path_list = [os.path.join(self._processed_path,self.shard_dir_name, f"shard_{i:03d}.lmdb") for i in range(self.shard_num)]
         
@@ -264,16 +267,18 @@ class MD17_DFT_Shard(InMemoryDataset):
             self.atom_list = ["C", "O", "H"]
             raise NotImplementedError
         
-        self.Q_dict = Onsite_3idx_Overlap_Integral(atom_list=self.atom_list, basis="def2-svp").Q_table()
+        self.Q_dict = None
+        self.Q = None
         self.convention_dict = get_convention_dict()
-        self.setup_Q()
+        if self.compute_q_tensor:
+            self.Q_dict = Onsite_3idx_Overlap_Integral(atom_list=self.atom_list, basis="def2-svp").Q_table()
+            self.setup_Q()
   
         for Z in self.atoms:
             orbitals.append(tuple((int(Z), int(l)) for l in self.orbitals_ref[Z]))
         
         self.orbitals = tuple(orbitals)
 
-        self._db_envs = {}  # Cache for LMDB environments by shard index
         self.shard_idx_list = [] # Mapping from data index to shard index
 
         self.functional = functional
@@ -538,25 +543,27 @@ class MD17_DFT_Shard(InMemoryDataset):
         edge_index = torch.tensor(edge_index, dtype=torch.int64).t().contiguous()
         full_edge_index = edge_index
         
-        ret_data = AOData(
-            pos=pos,
-            atoms=atoms.view(-1, 1),
-            dft_energy=dft_energy.view(1, 1),
-            dft_forces=dft_forces,
-            # energy=energy.view(1, 1),
-            # force=force,
-            hamiltonian=hamiltonian.reshape(1, h_dim, h_dim),
-            # data_hamiltonian=data_hamiltonian.reshape(1, h_dim, h_dim),
-            overlap=overlap_matrix.reshape(1, h_dim, h_dim),
-            init_ham=initial_hamiltonian.reshape(1, h_dim, h_dim),
-            AO_index=AO_index,
-            AO_l_index=AO_l_index,
-            AO_l_index_len=torch.tensor(len(AO_l_index), dtype=torch.int64).view(1, 1),
-            num_atoms=num_nodes.view(1, 1),
-            Q=self.Q,
-            h_dim=torch.tensor(h_dim, dtype=torch.int64).view(1, 1),
-            full_edge_index=full_edge_index,
-        )
+        data_kwargs = {
+            "pos": pos,
+            "atoms": atoms.view(-1, 1),
+            "dft_energy": dft_energy.view(1, 1),
+            "dft_forces": dft_forces,
+            # "energy": energy.view(1, 1),
+            # "force": force,
+            "hamiltonian": hamiltonian.reshape(1, h_dim, h_dim),
+            # "data_hamiltonian": data_hamiltonian.reshape(1, h_dim, h_dim),
+            "overlap": overlap_matrix.reshape(1, h_dim, h_dim),
+            "init_ham": initial_hamiltonian.reshape(1, h_dim, h_dim),
+            "AO_index": AO_index,
+            "AO_l_index": AO_l_index,
+            "AO_l_index_len": torch.tensor(len(AO_l_index), dtype=torch.int64).view(1, 1),
+            "num_atoms": num_nodes.view(1, 1),
+            "h_dim": torch.tensor(h_dim, dtype=torch.int64).view(1, 1),
+            "full_edge_index": full_edge_index,
+        }
+        if self.Q is not None:
+            data_kwargs["Q"] = self.Q
+        ret_data = AOData(**data_kwargs)
 
         # For GPU memory efficiency, we only use the necessary features
         if self.all_features:
@@ -599,6 +606,7 @@ if __name__ == "__main__":
     parser.add_argument("--prefix", type=str, default="_shard")
     parser.add_argument("--functional", type=str, default="pbe")
     parser.add_argument("--basis", type=str, default="def2svp")
+    parser.add_argument("--compute_q_tensor", action="store_true")
 
     args = parser.parse_args()
     logger.info(f"Functional: {args.functional}, Basis: {args.basis}")
@@ -621,6 +629,7 @@ if __name__ == "__main__":
         prefix=args.prefix,
         functional=args.functional,
         basis=args.basis,
+        compute_q_tensor=args.compute_q_tensor,
     )
     print(len(dataset))
     print(dataset[0])

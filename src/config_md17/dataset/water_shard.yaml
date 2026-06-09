@@ -6,6 +6,8 @@ density_loss: 0.01
 max_radius: 15.0
 
 use_shard: true
+prefix: _shard
+compute_q_tensor: false
 
 batch_size: 10
 train_batch_size: ${dataset.batch_size}

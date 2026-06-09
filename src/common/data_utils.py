@@ -25,10 +25,13 @@ def load_md17_dataset(conf: DictConfig, root_path: str, dataset_type: str = None
         if conf.dataset.get("use_shard", False):
             return MD17_DFT_Shard(
                 os.path.join(root_path, "dataset"),
-                prefix="_shard",
+                prefix=conf.dataset.get("prefix", "_shard"),
                 name=conf.dataset.dataset_name,
+                shard_num=conf.dataset.get("shard_num", -1),
+                shard_idx=conf.dataset.get("shard_idx", -1),
                 all_features=conf.dataset.get("all_features", False),
                 use_in_memory=conf.dataset.get("use_in_memory", False),
+                compute_q_tensor=conf.dataset.get("compute_q_tensor", False),
                 # transform=get_mask, # Not used
             )
         else:
@@ -135,7 +138,38 @@ def _create_md17_dataset(dataset, conf: DictConfig, train_size=None):
         valid_dataset = Subset(valid_dataset, range(50))
         logger.info(f"Split 1000 dataset: train size: {len(train_dataset)}, valid size: {len(valid_dataset)}, test size: {len(test_dataset)}")
 
+    valid_subset_dataset = _load_subset_only_shard_dataset(dataset, conf, "valid")
+    if valid_subset_dataset is not None:
+        valid_dataset = valid_subset_dataset
+
+    test_subset_dataset = _load_subset_only_shard_dataset(dataset, conf, "test")
+    if test_subset_dataset is not None:
+        test_dataset = test_subset_dataset
+
     return train_dataset, valid_dataset, test_dataset
+
+
+def _load_subset_only_shard_dataset(dataset, conf: DictConfig, subset: str):
+    if not conf.dataset.get("use_subset_only_shards", False):
+        return None
+    prefix = conf.dataset.get(f"{subset}_subset_prefix", None)
+    if prefix is None:
+        return None
+    if not hasattr(dataset, "folder"):
+        raise ValueError("subset-only MD17 shard loaders require the base dataset to expose a folder")
+
+    dataset_root = os.path.dirname(dataset.folder)
+    shard_num = conf.dataset.get(f"{subset}_subset_shard_num", 1)
+    logger.info(f"Using {subset} subset-only shard: prefix={prefix}, shard_num={shard_num}")
+    return MD17_DFT_Shard(
+        dataset_root,
+        prefix=prefix,
+        name=conf.dataset.dataset_name,
+        shard_num=shard_num,
+        all_features=conf.dataset.get("all_features", False),
+        use_in_memory=conf.dataset.get("use_in_memory", False),
+        compute_q_tensor=conf.dataset.get("compute_q_tensor", False),
+    )
 
 
 def _create_mdsim_dataset(dataset, conf: DictConfig, train_size=None):

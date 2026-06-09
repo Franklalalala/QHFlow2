@@ -81,6 +81,24 @@ def test_component_losses_skip_non_block_outputs():
     assert metrics == {}
 
 
+def test_component_losses_support_md17_water_dense_hamiltonian():
+    outputs = {"hamiltonian": torch.ones(1, 24, 24)}
+    target = SimpleNamespace(hamiltonian=torch.zeros(1, 24, 24))
+
+    metrics = compute_dptb_compatible_component_losses(outputs, target)
+
+    torch.testing.assert_close(metrics["onsite_loss"], torch.tensor(1.0))
+    torch.testing.assert_close(metrics["hopping_loss"], torch.tensor(1.0))
+    torch.testing.assert_close(metrics["onsite_count"], torch.tensor(246.0))
+    torch.testing.assert_close(metrics["hopping_count"], torch.tensor(330.0))
+
+
+def test_validation_sample_plan_keeps_only_one_euler_one_forward():
+    assert LitModel_flow._unique_sample_metric_steps([1], 1) == [(1, "_1")]
+    assert LitModel_flow._unique_sample_metric_steps([], 1) == [(1, "")]
+    assert LitModel_flow._unique_sample_metric_steps([1, 3], 1) == [(1, "_1"), (3, "_3")]
+
+
 def test_validation_logger_emits_dptb_style_aliases_for_euler_one():
     outputs, target, recorder = _make_logger_inputs()
 

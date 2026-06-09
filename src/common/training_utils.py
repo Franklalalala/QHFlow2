@@ -33,10 +33,10 @@ def setup_callbacks(conf: DictConfig, output_dir: Path, loss_format: str = ".7f"
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks.append(lr_monitor)
     
-    # Rich progress bar
-    rich_progress_bar_theme = RichProgressBarTheme(metrics_format=".7f")
-    rich_progress_bar = RichProgressBar(leave=False, theme=rich_progress_bar_theme)
-    callbacks.append(rich_progress_bar)
+    if conf.get("enable_progress_bar", True):
+        rich_progress_bar_theme = RichProgressBarTheme(metrics_format=".7f")
+        rich_progress_bar = RichProgressBar(leave=False, theme=rich_progress_bar_theme)
+        callbacks.append(rich_progress_bar)
     
     return callbacks
 
@@ -72,6 +72,7 @@ def setup_trainer(conf: DictConfig, callbacks, loggers, output_dir: Path):
         "log_every_n_steps": conf.get("log_every_n_steps", 50),
         "num_nodes": conf.get("num_nodes", 1),
         "num_sanity_val_steps": conf.get("num_sanity_val_steps", 2),
+        "check_val_every_n_epoch": conf.get("check_val_every_n_epoch", 1),
         "profiler": "simple" if conf.get("profiler", "simple") == "simple" else None,
         "accumulate_grad_batches": conf.get("accumulate_grad_batches", 1),
     }
@@ -109,6 +110,7 @@ def setup_warmup_trainer(conf: DictConfig, callbacks, loggers, output_dir: Path)
         "log_every_n_steps": conf.get("log_every_n_steps", 50),
         "num_nodes": conf.get("num_nodes", 1),
         "num_sanity_val_steps": conf.get("num_sanity_val_steps", 2),
+        "check_val_every_n_epoch": conf.get("check_val_every_n_epoch", 1),
         "profiler": "simple" if conf.get("profiler", "simple") == "simple" else None,
         "accumulate_grad_batches": conf.get("accumulate_grad_batches", 1),
     }
@@ -138,6 +140,6 @@ def log_training_config(conf: DictConfig):
     if conf.get("num_training_steps", -1) == -1:
         logger.info(f"  Max epochs: {conf.get('max_epochs', 1000)}")
     # logger.info(f"  Accelerator: {conf.get('accelerator', 'auto')}")
-    logger.info(f"  Strategy: {conf.get('strategy', "None")}")
+    logger.info(f"  Strategy: {conf.get('strategy', 'None')}")
     logger.info(f"  Devices: {conf.get('devices', 1)}")
     logger.info(f"  Data type: {conf.get('data_type', 'float32')}")
