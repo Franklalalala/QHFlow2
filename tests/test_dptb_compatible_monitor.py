@@ -111,10 +111,16 @@ def test_validation_logger_emits_dptb_style_aliases_for_euler_one():
     assert "val_hopping_loss" in record_by_name
     assert "val/dptb_compatible_onsite_loss_euler1" in record_by_name
     assert "val/dptb_compatible_hopping_loss_euler1" in record_by_name
+    assert "validation_compatible_euler_1_onsite_loss_mean/epoch" in record_by_name
+    assert "validation_compatible_euler_1_hopping_loss_mean/epoch" in record_by_name
+    assert "validation_onsite_loss_mean/epoch" in record_by_name
+    assert "validation_hopping_loss_mean/epoch" in record_by_name
     assert record_by_name["val/onsite_loss"]["on_step"] is False
     assert record_by_name["val/onsite_loss"]["on_epoch"] is True
     assert record_by_name["val/hopping_loss"]["on_step"] is False
     assert record_by_name["val/hopping_loss"]["on_epoch"] is True
+    assert record_by_name["validation_onsite_loss_mean/epoch"]["batch_size"] == 1
+    assert record_by_name["validation_hopping_loss_mean/epoch"]["batch_size"] == 1
 
 
 def test_test_logger_emits_dptb_style_aliases_for_euler_one():
@@ -129,10 +135,16 @@ def test_test_logger_emits_dptb_style_aliases_for_euler_one():
     assert "test_hopping_loss" in record_by_name
     assert "test/dptb_compatible_onsite_loss_euler1" in record_by_name
     assert "test/dptb_compatible_hopping_loss_euler1" in record_by_name
+    assert "test_compatible_euler_1_onsite_loss_mean/epoch" in record_by_name
+    assert "test_compatible_euler_1_hopping_loss_mean/epoch" in record_by_name
+    assert "test_onsite_loss_mean/epoch" in record_by_name
+    assert "test_hopping_loss_mean/epoch" in record_by_name
     assert record_by_name["test/onsite_loss"]["on_step"] is False
     assert record_by_name["test/onsite_loss"]["on_epoch"] is True
     assert record_by_name["test/hopping_loss"]["on_step"] is False
     assert record_by_name["test/hopping_loss"]["on_epoch"] is True
+    assert record_by_name["test_onsite_loss_mean/epoch"]["batch_size"] == 1
+    assert record_by_name["test_hopping_loss_mean/epoch"]["batch_size"] == 1
 
 
 def _make_logger_inputs():

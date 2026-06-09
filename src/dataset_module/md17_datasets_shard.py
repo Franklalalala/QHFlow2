@@ -119,6 +119,7 @@ class MD17_shard(LMDBShard_maker_db):
         atoms = np.frombuffer(data[5], dtype=np.int32)
         data_dict = bytes_to_object(data[26])
         force = data_dict["forces"]
+        force_array = np.asarray(force)
         energy = data_dict["energy"]
         data_hamiltonian = data_dict["hamiltonian"]
         # data_overlap = data_dict["overlap"]
@@ -161,7 +162,8 @@ class MD17_shard(LMDBShard_maker_db):
             "atoms": atoms.tobytes(),
             "pos": pos.tobytes(),     # unit: angstrom
             "energy": energy.item(),  # unit: Eh
-            "force": force.tobytes(), # unit: Eh/Bohr
+            "force": force_array.tobytes(), # unit: Eh/Bohr
+            "force_dtype": str(force_array.dtype),
             "dft_energy": dft_energy, # unit: Eh
             "dft_forces": dft_forces.tobytes(), # unit: Eh/Bohr
             "h_dim": h_dim,
@@ -473,13 +475,13 @@ class MD17_DFT_Shard(InMemoryDataset):
     #     return self.get(idx)
     
     def _get(self, idx):
-        """Optimized data loading: Reuse LMDB connection and minimize unnecessary operations."""
+        """Optimized data loading with LMDB handle refresh on stale-reader errors."""
         try:
-            return self._get(idx)
+            return self._get_from_lmdb(idx)
         except Exception as e:
             # If there's an error, try to refresh the LMDB environment
             logger.warning(f"Error accessing LMDB for idx {idx}: {e}. Attempting to refresh environment.")
-            shard_idx = self.shard_idx_list[idx]
+            shard_idx = int(self.shard_idx_list[idx])
             if shard_idx in self._db_envs:
                 try:
                     self._db_envs[shard_idx].close()
@@ -488,18 +490,40 @@ class MD17_DFT_Shard(InMemoryDataset):
                 del self._db_envs[shard_idx]
             
             # Retry with fresh environment
-            return self._get(idx)
-    
-    def _get(self, idx):
+            return self._get_from_lmdb(idx)
+
+    def _lmdb_key_candidates(self, idx):
+        """Return unique LMDB keys for both global and dense subset-only shards."""
+        idx = int(idx)
+        candidates = [idx]
+        if 0 <= idx < len(self.index_info):
+            _shard_idx, cur_idx, shard_data_idx = self.index_info[idx]
+            candidates.extend([int(cur_idx), int(shard_data_idx)])
+
+        seen = []
+        for value in candidates:
+            key = int(value).to_bytes(length=4, byteorder="big")
+            if key not in seen:
+                seen.append(key)
+        return seen
+
+    def _get_from_lmdb(self, idx):
         # Get cached LMDB environment (no need for context manager since we're reusing connections)        
         db_env = self._get_shard_db_env(idx)
         with db_env.begin() as txn:
-            key = int(idx).to_bytes(length=4, byteorder="big")
-            data_dict = txn.get(key)
+            tried_keys = []
+            data_dict = None
+            for key in self._lmdb_key_candidates(idx):
+                tried_keys.append(int.from_bytes(key, byteorder="big"))
+                data_dict = txn.get(key)
+                if data_dict is not None:
+                    break
             
             if data_dict is None:
-                print(self.get_key_list(idx))
-                raise KeyError(f"Index idx: {idx}, shard_data_idx: {self.shard_data_idx_list[idx]} not found in database {self.shard_idx_list[idx]}")
+                raise KeyError(
+                    f"Index idx: {idx}, shard_data_idx: {self.shard_data_idx_list[idx]}, "
+                    f"tried_keys={tried_keys} not found in database {self.shard_idx_list[idx]}"
+                )
                 
             data_dict = pickle.loads(data_dict)
             data = self.get_mol(data_dict, orb_energy_and_coeff=True)
@@ -510,7 +534,28 @@ class MD17_DFT_Shard(InMemoryDataset):
         atoms = torch.tensor(np.frombuffer(data_dict["atoms"], np.int32), dtype=torch.int64)
         pos = torch.tensor(np.frombuffer(data_dict["pos"], np.float64).reshape(-1, 3), dtype=torch.float64)
         energy = torch.tensor(data_dict["energy"], dtype=torch.float64)
-        force = torch.tensor(np.frombuffer(data_dict["force"], np.float32).reshape(-1, 3), dtype=torch.float64) # unit: meV/Angstrom
+        force_dtype = np.dtype(data_dict.get("force_dtype", np.float32))
+        expected_force_size = int(atoms.numel()) * 3
+        force_array = None
+        tried_force_dtypes = []
+        for candidate_dtype in (force_dtype, np.float64, np.float32):
+            candidate_dtype = np.dtype(candidate_dtype)
+            if candidate_dtype in tried_force_dtypes:
+                continue
+            tried_force_dtypes.append(candidate_dtype)
+            try:
+                candidate = np.frombuffer(data_dict["force"], candidate_dtype)
+            except ValueError:
+                continue
+            if candidate.size == expected_force_size:
+                force_array = candidate
+                break
+        if force_array is None:
+            raise ValueError(
+                f"force buffer for {int(atoms.numel())} atoms could not be decoded with "
+                f"dtypes {[str(dtype) for dtype in tried_force_dtypes]}; expected {expected_force_size} values"
+            )
+        force = torch.tensor(force_array.reshape(-1, 3), dtype=torch.float64) # unit: Eh/Bohr
         dft_energy = torch.tensor(data_dict["dft_energy"], dtype=torch.float64)
         dft_forces = torch.tensor(np.frombuffer(data_dict["dft_forces"], np.float64).reshape(-1, 3), dtype=torch.float64) # unit: Eh/Bohr
         h_dim = data_dict["h_dim"] # sum of orbital dimensions

@@ -3043,36 +3043,64 @@ class LitModel_flow(LitModel):
         if post_fix != f"_{num_timesteps}":
             return
 
+        canonical_prefix = "validation" if prefix == "val" else "test"
+
+        def _log_metric(name, value, *, on_step, on_epoch, batch_size):
+            self.log(
+                name,
+                value,
+                on_step=on_step,
+                on_epoch=on_epoch,
+                prog_bar=False,
+                sync_dist=True,
+                batch_size=batch_size,
+            )
+
         metrics = compute_dptb_compatible_component_losses(sample, batch_one)
         for key, value in metrics.items():
-            self.log(
+            _log_metric(
                 f"{prefix}/dptb_compatible_{key}_euler{num_timesteps}",
                 value,
                 on_step=True,
                 on_epoch=True,
-                prog_bar=False,
-                sync_dist=True,
                 batch_size=self.cur_batch_size,
             )
+            if key in {"onsite_loss", "hopping_loss"}:
+                _log_metric(
+                    f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch",
+                    value,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=1,
+                )
 
         if num_timesteps == 1:
             dptb_style_aliases = {
                 "onsite_loss": (f"{prefix}/onsite_loss", f"{prefix}_onsite_loss"),
                 "hopping_loss": (f"{prefix}/hopping_loss", f"{prefix}_hopping_loss"),
             }
+            canonical_aliases = {
+                "onsite_loss": f"{canonical_prefix}_onsite_loss_mean/epoch",
+                "hopping_loss": f"{canonical_prefix}_hopping_loss_mean/epoch",
+            }
             for key, log_names in dptb_style_aliases.items():
                 if key not in metrics:
                     continue
                 for log_name in log_names:
-                    self.log(
+                    _log_metric(
                         log_name,
                         metrics[key],
                         on_step=False,
                         on_epoch=True,
-                        prog_bar=False,
-                        sync_dist=True,
                         batch_size=self.cur_batch_size,
                     )
+                _log_metric(
+                    canonical_aliases[key],
+                    metrics[key],
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=1,
+                )
 
     def _log_sample_metric_qh9_mul(self, batch_one, prefix, num_timesteps=1, post_fix="", mul=5):
         """
