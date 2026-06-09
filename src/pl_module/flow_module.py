@@ -26,6 +26,7 @@ from tqdm.rich import tqdm
 from torch_scatter import scatter_sum
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+from common.dptb_compatible_monitor import compute_dptb_compatible_component_losses
 from common.matrix_transforms import matrix_transform_blocks, transform_coefficient_blocks
 
 
@@ -258,6 +259,16 @@ class LitModel_flow(LitModel):
         self.log_n_steps_ODE_val = conf.get("log_n_steps_ODE_val", [1])
         assert type(self.log_n_steps_ODE_test) in [list, tuple, set, None]
         assert type(self.log_n_steps_ODE_val) in [list, tuple, set, None]
+        self.log_n_steps_ODE_val = list(self.log_n_steps_ODE_val or [])
+        self.dptb_compatible_monitor = conf.flow.get("dptb_compatible_monitor", True)
+        self.dptb_compatible_monitor_steps = conf.flow.get("dptb_compatible_monitor_steps", [1])
+        if isinstance(self.dptb_compatible_monitor_steps, int):
+            self.dptb_compatible_monitor_steps = [self.dptb_compatible_monitor_steps]
+        self.dptb_compatible_monitor_steps = list(self.dptb_compatible_monitor_steps or [])
+        if self.dptb_compatible_monitor:
+            for n_steps in self.dptb_compatible_monitor_steps:
+                if n_steps not in self.log_n_steps_ODE_val:
+                    self.log_n_steps_ODE_val.append(n_steps)
         
         # Setup convention dictionary
         self.convention_dict = convention_dict
@@ -2996,12 +3007,57 @@ class LitModel_flow(LitModel):
                         sync_dist=True,
                         batch_size=self.cur_batch_size,
                     )
+                self._log_dptb_compatible_component_losses(
+                    sample,
+                    batch_one,
+                    prefix,
+                    num_timesteps,
+                    post_fix,
+                )
             if save_pred:
                 return traj, sample
         except Exception as e:
             logger.error(f"Error in logging sample error: {e}")
             import traceback
             logger.error(f"Error trace: {traceback.format_exc()}")
+
+    def _log_dptb_compatible_component_losses(self, sample, batch_one, prefix, num_timesteps, post_fix):
+        if not self.dptb_compatible_monitor or prefix != "val":
+            return
+        if num_timesteps not in self.dptb_compatible_monitor_steps:
+            return
+        if post_fix != f"_{num_timesteps}":
+            return
+
+        metrics = compute_dptb_compatible_component_losses(sample, batch_one)
+        for key, value in metrics.items():
+            self.log(
+                f"{prefix}/dptb_compatible_{key}_euler{num_timesteps}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=False,
+                sync_dist=True,
+                batch_size=self.cur_batch_size,
+            )
+
+        if num_timesteps == 1:
+            dptb_style_aliases = {
+                "onsite_loss": f"{prefix}_onsite_loss",
+                "hopping_loss": f"{prefix}_hopping_loss",
+            }
+            for key, log_name in dptb_style_aliases.items():
+                if key not in metrics:
+                    continue
+                self.log(
+                    log_name,
+                    metrics[key],
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=False,
+                    sync_dist=True,
+                    batch_size=self.cur_batch_size,
+                )
 
     def _log_sample_metric_qh9_mul(self, batch_one, prefix, num_timesteps=1, post_fix="", mul=5):
         """
