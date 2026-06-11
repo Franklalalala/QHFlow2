@@ -56,7 +56,7 @@ def get_model(args):
         "radius_embed_dim": getattr(args, "radius_embed_dim", 16),
         "max_T": getattr(args, "max_T", 15),
         "use_block_S": getattr(args, "use_block_S", True),
-        "use_block_H": getattr(args, "use_block_H_fix", False),
+        "use_block_H": getattr(args, "use_block_H", getattr(args, "use_block_H_fix", False)),
         "ham_dim": getattr(args, "ham_dim", 24),
         "ham_hidden": getattr(args, "ham_hidden", 24 * 24 // 2),
         "dataset_type": getattr(args, "dataset_type", "qh9"),
