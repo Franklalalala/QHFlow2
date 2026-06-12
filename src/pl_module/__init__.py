@@ -3,6 +3,7 @@ from pl_module.flow_module import LitModel_flow
 from pl_module.no_flow_module import LitModel_no_flow
 from pl_module.flow_module_EF import LitModel_flow_EF
 from pl_module.no_flow_module_new import LitModel_flow as LitModel_no_flow_new
+from pl_module.pixel_mean_flow_module import LitModel_pixel_mean_flow
 
 
 def get_pl_model(conf):
@@ -25,6 +26,11 @@ def _get_model_by_pl_type(pl_type):
     model_mappings = {
         "base".lower(): LitModel,
         "flow".lower(): LitModel_flow,
+        "pixel_meanflow".lower(): LitModel_pixel_mean_flow,
+        "pixel_mean_flow".lower(): LitModel_pixel_mean_flow,
+        "meanflow".lower(): LitModel_pixel_mean_flow,
+        "mean_flow".lower(): LitModel_pixel_mean_flow,
+        "pmf".lower(): LitModel_pixel_mean_flow,
         "no_flow".lower(): LitModel_no_flow,
         "flow_EF".lower(): LitModel_flow_EF,
         "no_flow_new".lower(): LitModel_no_flow_new,

@@ -65,6 +65,7 @@ import torch.nn.functional as F
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.layers_v2 import get_time_embedding
+from common.pixel_meanflow import meanflow_time_channels
 
 @registry.register_model("escnmd_backbone_ham")
 class eSCNMDBackbone_ham(nn.Module, MOLEInterface):
@@ -106,6 +107,7 @@ class eSCNMDBackbone_ham(nn.Module, MOLEInterface):
         use_block_S: bool = True,
         use_block_H: bool = True,
         use_time_embedding: bool = True,
+        meanflow_time_conditioning: str = "trh",
         num_ham_gnn_layers: int = 2,
     ) -> None:
         super().__init__()
@@ -128,6 +130,7 @@ class eSCNMDBackbone_ham(nn.Module, MOLEInterface):
         self.use_block_S = use_block_S
         self.use_block_H = use_block_H
         self.use_time_embedding = use_time_embedding
+        self.meanflow_time_conditioning = str(meanflow_time_conditioning).lower()
         self.num_ham_gnn_layers = num_ham_gnn_layers
 
         # NOTE: graph construction related, to remove, except for cutoff
@@ -567,7 +570,12 @@ class eSCNMDBackbone_ham(nn.Module, MOLEInterface):
             x_message[:, 0, :] = x_message_original[:, 0, :]
         
         if self.use_time_embedding:
-            time_message = get_time_embedding(data_dict["t"], self.sphere_channels)[data_dict["batch"]]
+            time_channels = meanflow_time_channels(data_dict, mode=self.meanflow_time_conditioning)
+            time_message = None
+            for time_key in time_channels:
+                embedded_time = get_time_embedding(time_key, self.sphere_channels)
+                time_message = embedded_time if time_message is None else time_message + embedded_time
+            time_message = time_message[data_dict["batch"]]
         x_message[:, 0, :] = x_message[:, 0, :] + time_message
 
         matrix_l_len = node_feats_H.shape[1]
