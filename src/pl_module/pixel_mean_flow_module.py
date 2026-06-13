@@ -6,9 +6,12 @@ import torch
 
 from common.custom_logger import get_logger
 from common.pixel_meanflow import (
+    add_qh9_nondiag_endpoint_loss,
     adaptive_masked_loss,
     average_velocity_from_endpoint,
     compound_velocity,
+    extract_endpoint_prediction,
+    format_qh9_sample_result,
     resolve_profile_options,
     sample_two_times,
     time_view,
@@ -44,11 +47,16 @@ class LitModel_pixel_mean_flow(LitModel_flow):
                 "original_criterion_weight", 0.0
             )
         )
+        self.pmf_aux_nondiag_endpoint_weight = float(
+            conf.flow.get("pixel_meanflow", conf.flow.get("meanflow", {})).get(
+                "aux_nondiag_endpoint_weight", 1.0 if self.qh9 else 0.0
+            )
+        )
         self.pmf_time_conditioning = mf["time_conditioning"]
         self._set_model_time_conditioning(self.pmf_time_conditioning)
         logger.info(
             "Pixel MeanFlow enabled: profile=%s sampling=%s min_t=%.3g "
-            "jvp=%s/%s norm_p=%.3g aux_x=%.3g aux_v=%.3g original=%.3g time=%s",
+            "jvp=%s/%s norm_p=%.3g aux_x=%.3g aux_v=%.3g aux_off=%.3g original=%.3g time=%s",
             self.pmf_profile,
             self.pmf_time_sampling,
             self.pmf_min_t,
@@ -57,6 +65,7 @@ class LitModel_pixel_mean_flow(LitModel_flow):
             self.pmf_norm_p,
             self.pmf_aux_endpoint_weight,
             self.pmf_aux_boundary_v_weight,
+            self.pmf_aux_nondiag_endpoint_weight,
             self.pmf_original_criterion_weight,
             self.pmf_time_conditioning,
         )
@@ -111,15 +120,13 @@ class LitModel_pixel_mean_flow(LitModel_flow):
         return self._corrupt_qh9(batch, t) if self.qh9 else self._corrupt_md17(batch, t)
 
     def _extract_x_pred(self, outputs, batch):
-        if self.qh9:
-            x_pred = outputs["hamiltonian_diagonal_blocks"]
-            if self.use_res_target:
-                x_pred = x_pred - batch["diagonal_init_ham"]
-            return x_pred
-        x_pred = outputs["hamiltonian"]
-        if self.use_res_target:
-            x_pred = x_pred - batch.init_ham
-        return x_pred
+        return extract_endpoint_prediction(
+            outputs,
+            batch,
+            qh9=self.qh9,
+            use_res_target=self.use_res_target,
+            use_init_hamiltonian_residue=self.use_init_hamiltonian_residue,
+        )
 
     def _state_mask(self, batch, state: torch.Tensor):
         if self.qh9:
@@ -250,6 +257,15 @@ class LitModel_pixel_mean_flow(LitModel_flow):
             "meanflow_fm_frac": getattr(batch, "meanflow_fm_mask", torch.zeros_like(t, dtype=torch.bool)).detach().float().mean(),
         }
 
+        if self.qh9:
+            add_qh9_nondiag_endpoint_loss(
+                errors,
+                outputs,
+                batch,
+                weight=self.pmf_aux_nondiag_endpoint_weight,
+                norm_eps=self.pmf_norm_eps,
+            )
+
         if self.pmf_original_criterion_weight > 0.0:
             endpoint_errors = self.criterion(
                 outputs,
@@ -360,7 +376,10 @@ class LitModel_pixel_mean_flow(LitModel_flow):
             })
         if self.use_res_target:
             H_t = H_t + batch["diagonal_init_ham"]
-        result = {"hamiltonian_diagonal_blocks": H_t}
-        if outputs is not None and "hamiltonian_non_diagonal_blocks" in outputs:
-            result["hamiltonian_non_diagonal_blocks"] = outputs["hamiltonian_non_diagonal_blocks"]
+        result = format_qh9_sample_result(
+            H_t,
+            outputs,
+            use_non_diagonal_hamiltonian_scale=self.use_non_diagonal_hamiltonian_scale,
+            non_diagonal_hamiltonian_scale=self.non_diagonal_hamiltonian_scale,
+        )
         return result, traj, preds

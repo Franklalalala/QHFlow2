@@ -9,8 +9,8 @@ def resolve_profile_options(options: Optional[Mapping] = None) -> Dict[str, obje
     """Resolve conservative/aggressive Pixel MeanFlow defaults.
 
     Conservative is the default paper-semantic path for Hamiltonians: use the
-    interpolation path velocity as the JVP tangent and keep extra normalization
-    or boundary-v losses off.  Aggressive is explicit opt-in.
+    boundary/marginal velocity proxy as the JVP tangent and keep extra
+    normalization or boundary-v losses off.  Aggressive is explicit opt-in.
     """
     options = dict(options or {})
     profile = str(options.get("profile", "conservative")).lower()
@@ -30,7 +30,7 @@ def resolve_profile_options(options: Optional[Mapping] = None) -> Dict[str, obje
         "fd_eps": float(options.get("fd_eps", 1.0e-3)),
         "jvp_backend": str(options.get("jvp_backend", "auto")).lower(),
         "jvp_create_graph": bool(options.get("jvp_create_graph", True)),
-        "jvp_tangent": str(options.get("jvp_tangent", "boundary" if aggressive else "path")).lower(),
+        "jvp_tangent": str(options.get("jvp_tangent", "boundary")).lower(),
         "aux_endpoint_weight": float(options.get("aux_endpoint_weight", 0.05)),
         "aux_boundary_v_weight": float(options.get("aux_boundary_v_weight", 0.10 if aggressive else 0.0)),
         "norm_p": float(options.get("norm_p", 1.0 if aggressive else 0.0)),
@@ -44,6 +44,95 @@ def resolve_profile_options(options: Optional[Mapping] = None) -> Dict[str, obje
     if resolved["time_conditioning"] not in {"t", "h", "trh"}:
         raise ValueError("pixel_meanflow.time_conditioning must be t, h, or trh")
     return resolved
+
+
+def _batch_value(batch, key: str):
+    if isinstance(batch, Mapping):
+        return batch[key]
+    try:
+        return batch[key]
+    except (KeyError, TypeError, AttributeError):
+        return getattr(batch, key)
+
+
+def extract_endpoint_prediction(
+    outputs: Mapping[str, torch.Tensor],
+    batch,
+    *,
+    qh9: bool,
+    use_res_target: bool,
+    use_init_hamiltonian_residue: bool,
+) -> torch.Tensor:
+    if qh9:
+        x_pred = outputs["hamiltonian_diagonal_blocks"]
+        if use_res_target and use_init_hamiltonian_residue:
+            x_pred = x_pred - _batch_value(batch, "diagonal_init_ham")
+        return x_pred
+
+    x_pred = outputs["hamiltonian"]
+    if use_res_target and use_init_hamiltonian_residue:
+        x_pred = x_pred - _batch_value(batch, "init_ham")
+    return x_pred
+
+
+def add_qh9_nondiag_endpoint_loss(
+    errors: Dict[str, torch.Tensor],
+    outputs: Mapping[str, torch.Tensor],
+    batch,
+    *,
+    weight: float,
+    norm_eps: float,
+) -> None:
+    if weight <= 0.0 or "hamiltonian_non_diagonal_blocks" not in outputs:
+        return
+
+    off_pred = outputs["hamiltonian_non_diagonal_blocks"]
+    off_tgt = _batch_value(batch, "non_diagonal_hamiltonian").to(
+        device=off_pred.device, dtype=off_pred.dtype
+    )
+    off_mask = _batch_value(batch, "non_diagonal_hamiltonian_mask").to(
+        device=off_pred.device, dtype=off_pred.dtype
+    )
+    off_loss, off_mse, off_mae = adaptive_masked_loss(
+        off_pred - off_tgt,
+        off_mask,
+        norm_p=0.0,
+        norm_eps=norm_eps,
+    )
+    errors["meanflow_nondiag_endpoint"] = off_loss
+    errors["meanflow_nondiag_endpoint_mse"] = off_mse
+    errors["meanflow_nondiag_endpoint_mae"] = off_mae
+    errors["loss"] = errors["loss"] + weight * off_loss
+
+
+def format_qh9_sample_result(
+    H_t: torch.Tensor,
+    outputs: Optional[Mapping[str, torch.Tensor]],
+    *,
+    use_non_diagonal_hamiltonian_scale: bool,
+    non_diagonal_hamiltonian_scale: float,
+) -> Dict[str, torch.Tensor]:
+    result = {"hamiltonian_diagonal_blocks": H_t}
+    if outputs is None:
+        return result
+
+    if "hamiltonian_non_diagonal_blocks" in outputs:
+        non_diag = outputs["hamiltonian_non_diagonal_blocks"]
+        if use_non_diagonal_hamiltonian_scale:
+            non_diag = non_diag / non_diagonal_hamiltonian_scale
+        result["hamiltonian_non_diagonal_blocks"] = non_diag
+
+    for key in [
+        "node_attr",
+        "node_attr_init",
+        "fii",
+        "fij",
+        "full_edge_index",
+        "full_edge_distance_vec",
+    ]:
+        if key in outputs:
+            result[key] = outputs[key]
+    return result
 
 
 def sample_two_times(

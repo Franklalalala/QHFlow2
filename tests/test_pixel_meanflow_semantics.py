@@ -1,10 +1,13 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
+import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import common.pixel_meanflow as pmf
 from common.pixel_meanflow import (
     average_velocity_from_endpoint,
     compound_velocity,
@@ -82,7 +85,7 @@ def test_aggressive_profile_is_explicit_opt_in():
     aggressive = resolve_profile_options({"profile": "aggressive"})
 
     assert conservative["profile"] == "conservative"
-    assert conservative["jvp_tangent"] == "path"
+    assert conservative["jvp_tangent"] == "boundary"
     assert conservative["norm_p"] == 0.0
     assert conservative["aux_boundary_v_weight"] == 0.0
 
@@ -91,3 +94,93 @@ def test_aggressive_profile_is_explicit_opt_in():
     assert aggressive["norm_p"] == 1.0
     assert aggressive["aux_boundary_v_weight"] > 0.0
     assert aggressive["time_conditioning"] == "h"
+
+
+def test_extract_x_pred_subtracts_init_only_when_forward_adds_init():
+    outputs = {"hamiltonian_diagonal_blocks": torch.tensor([[[5.0]]])}
+    batch = {"diagonal_init_ham": torch.tensor([[[2.0]]])}
+
+    torch.testing.assert_close(
+        pmf.extract_endpoint_prediction(
+            outputs,
+            batch,
+            qh9=True,
+            use_res_target=True,
+            use_init_hamiltonian_residue=False,
+        ),
+        torch.tensor([[[5.0]]]),
+    )
+    torch.testing.assert_close(
+        pmf.extract_endpoint_prediction(
+            outputs,
+            batch,
+            qh9=True,
+            use_res_target=True,
+            use_init_hamiltonian_residue=True,
+        ),
+        torch.tensor([[[3.0]]]),
+    )
+
+    outputs = {"hamiltonian": torch.tensor([[[7.0]]])}
+    batch = SimpleNamespace(init_ham=torch.tensor([[[3.0]]]))
+    torch.testing.assert_close(
+        pmf.extract_endpoint_prediction(
+            outputs,
+            batch,
+            qh9=False,
+            use_res_target=True,
+            use_init_hamiltonian_residue=False,
+        ),
+        torch.tensor([[[7.0]]]),
+    )
+    torch.testing.assert_close(
+        pmf.extract_endpoint_prediction(
+            outputs,
+            batch,
+            qh9=False,
+            use_res_target=True,
+            use_init_hamiltonian_residue=True,
+        ),
+        torch.tensor([[[4.0]]]),
+    )
+
+
+def test_qh9_nondiag_endpoint_aux_adds_loss_and_metrics():
+    errors = {"loss": torch.tensor(1.0)}
+    outputs = {"hamiltonian_non_diagonal_blocks": torch.tensor([[3.0, 5.0]])}
+    batch = {
+        "non_diagonal_hamiltonian": torch.tensor([[1.0, 1.0]]),
+        "non_diagonal_hamiltonian_mask": torch.tensor([[1.0, 0.0]]),
+    }
+
+    pmf.add_qh9_nondiag_endpoint_loss(errors, outputs, batch, weight=2.0, norm_eps=0.01)
+
+    assert errors["meanflow_nondiag_endpoint"].item() == pytest.approx(4.0)
+    assert errors["meanflow_nondiag_endpoint_mse"].item() == pytest.approx(4.0)
+    assert errors["meanflow_nondiag_endpoint_mae"].item() == pytest.approx(2.0)
+    assert errors["loss"].item() == pytest.approx(9.0)
+
+
+def test_format_qh9_sample_result_preserves_compatible_fields_and_unscales_nondiag():
+    H_t = torch.tensor([[[11.0]]])
+    outputs = {
+        "hamiltonian_non_diagonal_blocks": torch.tensor([[8.0]]),
+        "node_attr": torch.tensor([[1.0, 2.0]]),
+        "node_attr_init": torch.tensor([[3.0, 4.0]]),
+        "fii": torch.tensor([5.0]),
+        "fij": torch.tensor([6.0]),
+        "full_edge_index": torch.tensor([[0], [1]]),
+        "full_edge_distance_vec": torch.tensor([[0.1, 0.2, 0.3]]),
+    }
+
+    result = pmf.format_qh9_sample_result(
+        H_t,
+        outputs,
+        use_non_diagonal_hamiltonian_scale=True,
+        non_diagonal_hamiltonian_scale=2.0,
+    )
+
+    torch.testing.assert_close(result["hamiltonian_diagonal_blocks"], H_t)
+    torch.testing.assert_close(result["hamiltonian_non_diagonal_blocks"], torch.tensor([[4.0]]))
+    for key in ["node_attr", "node_attr_init", "fii", "fij", "full_edge_index", "full_edge_distance_vec"]:
+        assert result[key] is outputs[key]
