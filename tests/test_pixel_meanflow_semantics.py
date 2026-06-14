@@ -161,7 +161,31 @@ def test_qh9_nondiag_endpoint_aux_adds_loss_and_metrics():
     assert errors["loss"].item() == pytest.approx(9.0)
 
 
-def test_format_qh9_sample_result_preserves_compatible_fields_and_unscales_nondiag():
+def test_qh9_nondiag_endpoint_aux_matches_scaled_original_criterion_space():
+    errors = {"loss": torch.tensor(1.0)}
+    outputs = {"hamiltonian_non_diagonal_blocks": torch.tensor([[6.0, 5.0]])}
+    batch = {
+        "non_diagonal_hamiltonian": torch.tensor([[3.0, 1.0]]),
+        "non_diagonal_hamiltonian_mask": torch.tensor([[1.0, 0.0]]),
+    }
+
+    pmf.add_qh9_nondiag_endpoint_loss(
+        errors,
+        outputs,
+        batch,
+        weight=2.0,
+        norm_eps=0.01,
+        use_non_diagonal_hamiltonian_scale=True,
+        non_diagonal_hamiltonian_scale=2.0,
+    )
+
+    assert errors["meanflow_nondiag_endpoint"].item() == pytest.approx(0.0)
+    assert errors["meanflow_nondiag_endpoint_mse"].item() == pytest.approx(0.0)
+    assert errors["meanflow_nondiag_endpoint_mae"].item() == pytest.approx(0.0)
+    assert errors["loss"].item() == pytest.approx(1.0)
+
+
+def test_qh9_pmf_sample_result_preserves_flow_module_contract():
     H_t = torch.tensor([[[11.0]]])
     outputs = {
         "hamiltonian_non_diagonal_blocks": torch.tensor([[8.0]]),

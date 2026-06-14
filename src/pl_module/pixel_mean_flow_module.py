@@ -264,6 +264,8 @@ class LitModel_pixel_mean_flow(LitModel_flow):
                 batch,
                 weight=self.pmf_aux_nondiag_endpoint_weight,
                 norm_eps=self.pmf_norm_eps,
+                use_non_diagonal_hamiltonian_scale=self.use_non_diagonal_hamiltonian_scale,
+                non_diagonal_hamiltonian_scale=self.non_diagonal_hamiltonian_scale,
             )
 
         if self.pmf_original_criterion_weight > 0.0:

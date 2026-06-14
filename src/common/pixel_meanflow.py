@@ -82,6 +82,8 @@ def add_qh9_nondiag_endpoint_loss(
     *,
     weight: float,
     norm_eps: float,
+    use_non_diagonal_hamiltonian_scale: bool = False,
+    non_diagonal_hamiltonian_scale: float = 1.0,
 ) -> None:
     if weight <= 0.0 or "hamiltonian_non_diagonal_blocks" not in outputs:
         return
@@ -90,6 +92,8 @@ def add_qh9_nondiag_endpoint_loss(
     off_tgt = _batch_value(batch, "non_diagonal_hamiltonian").to(
         device=off_pred.device, dtype=off_pred.dtype
     )
+    if use_non_diagonal_hamiltonian_scale:
+        off_tgt = off_tgt * float(non_diagonal_hamiltonian_scale)
     off_mask = _batch_value(batch, "non_diagonal_hamiltonian_mask").to(
         device=off_pred.device, dtype=off_pred.dtype
     )
