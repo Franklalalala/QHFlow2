@@ -309,9 +309,11 @@ class LitModel_pixel_mean_flow(LitModel_flow):
         errors = self.meanflow_criterion(batch)
         self._log_error(errors, "val")
         loss = errors["loss"]
-        if self.error_threshold is None or loss < self.error_threshold:
-            for n_steps, post_fix in self._unique_sample_metric_steps(self.log_n_steps_ODE_val, self.num_ode_steps_val):
-                self._log_sample_metric(batch_one, "val", num_timesteps=n_steps, post_fix=post_fix)
+        threshold_passed = self.error_threshold is None or loss < self.error_threshold
+        for n_steps, post_fix in self._validation_sample_metric_steps(
+            threshold_passed=threshold_passed
+        ):
+            self._log_sample_metric(batch_one, "val", num_timesteps=n_steps, post_fix=post_fix)
         return None
 
     def _test_step_standard(self, batch, batch_idx):
@@ -321,9 +323,8 @@ class LitModel_pixel_mean_flow(LitModel_flow):
         self.cur_batch_size = len(batch)
         errors = self.meanflow_criterion(batch)
         self._log_error(errors, "test")
-        for n_steps in self.log_n_steps_ODE_test:
-            self._log_sample_metric(batch_one, "test", num_timesteps=n_steps, post_fix=f"_{n_steps}")
-        self._log_sample_metric(batch_one, "test", num_timesteps=self.num_ode_steps_test)
+        for n_steps, post_fix in self._test_sample_metric_steps():
+            self._log_sample_metric(batch_one, "test", num_timesteps=n_steps, post_fix=post_fix)
         return None
 
     def sample(self, batch, num_timesteps=1, min_t=DEFAULT_MIN_T, sample_random=True):

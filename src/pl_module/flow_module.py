@@ -26,7 +26,13 @@ from tqdm.rich import tqdm
 from torch_scatter import scatter_sum
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
-from common.dptb_compatible_monitor import compute_dptb_compatible_component_losses
+from common.dptb_compatible_monitor import (
+    compute_dptb_compatible_component_losses,
+    dptb_component_log_specs,
+    required_dptb_sample_steps,
+    unique_sample_metric_steps,
+    validation_sample_metric_steps,
+)
 from common.matrix_transforms import matrix_transform_blocks, transform_coefficient_blocks
 
 
@@ -262,13 +268,11 @@ class LitModel_flow(LitModel):
         self.log_n_steps_ODE_val = list(self.log_n_steps_ODE_val or [])
         self.log_n_steps_ODE_test = list(self.log_n_steps_ODE_test or [])
         self.dptb_compatible_monitor = conf.flow.get("dptb_compatible_monitor", True)
+        self.dptb_compatible_extra_tags = conf.flow.get("dptb_compatible_extra_tags", False)
         self.dptb_compatible_monitor_steps = conf.flow.get("dptb_compatible_monitor_steps", [1])
         if isinstance(self.dptb_compatible_monitor_steps, int):
             self.dptb_compatible_monitor_steps = [self.dptb_compatible_monitor_steps]
         self.dptb_compatible_monitor_steps = list(self.dptb_compatible_monitor_steps or [])
-        if self.dptb_compatible_monitor:
-            self._ensure_sample_metric_steps(self.log_n_steps_ODE_val, self.dptb_compatible_monitor_steps)
-            self._ensure_sample_metric_steps(self.log_n_steps_ODE_test, self.dptb_compatible_monitor_steps)
         
         # Setup convention dictionary
         self.convention_dict = convention_dict
@@ -2331,12 +2335,11 @@ class LitModel_flow(LitModel):
         loss = errors["loss"]
         self._log_error(errors, "val")
         
-        # Conditional sampling evaluation
-        if self.error_threshold is None or loss < self.error_threshold:
-            for n_steps, post_fix in self._unique_sample_metric_steps(
-                self.log_n_steps_ODE_val, self.num_ode_steps_val
-            ):
-                self._log_sample_metric(batch_one, "val", num_timesteps=n_steps, post_fix=post_fix)
+        threshold_passed = self.error_threshold is None or loss < self.error_threshold
+        for n_steps, post_fix in self._validation_sample_metric_steps(
+            threshold_passed=threshold_passed
+        ):
+            self._log_sample_metric(batch_one, "val", num_timesteps=n_steps, post_fix=post_fix)
             
         return None
 
@@ -2349,16 +2352,28 @@ class LitModel_flow(LitModel):
 
     @staticmethod
     def _unique_sample_metric_steps(log_steps, default_step):
-        plan = []
-        seen = set()
-        for n_steps in log_steps or []:
-            if n_steps in seen:
-                continue
-            seen.add(n_steps)
-            plan.append((n_steps, f"_{n_steps}"))
-        if default_step not in seen:
-            plan.append((default_step, ""))
-        return plan
+        return unique_sample_metric_steps(log_steps, default_step)
+
+    def _dptb_required_sample_steps(self):
+        return required_dptb_sample_steps(
+            self.dptb_compatible_monitor,
+            self.dptb_compatible_extra_tags,
+            self.dptb_compatible_monitor_steps,
+        )
+
+    def _validation_sample_metric_steps(self, *, threshold_passed):
+        return validation_sample_metric_steps(
+            self._dptb_required_sample_steps() + list(self.log_n_steps_ODE_val or []),
+            self.num_ode_steps_val,
+            threshold_passed=threshold_passed,
+            legacy_enabled=self.dptb_compatible_monitor,
+        )
+
+    def _test_sample_metric_steps(self):
+        return unique_sample_metric_steps(
+            self._dptb_required_sample_steps() + list(self.log_n_steps_ODE_test or []),
+            self.num_ode_steps_test,
+        )
 
     def test_step(self, batch, batch_idx):
         """
@@ -2486,18 +2501,8 @@ class LitModel_flow(LitModel):
         loss = errors["loss"]
         self._log_error(errors, "test")
         
-        # Comprehensive sampling evaluation
-        if self.qh9:
-            # assert self.test_batch_size == 1, "QH9 test batch size must be 1"
-            # Use QH9-specific test evaluation
-            for n_steps in self.log_n_steps_ODE_test:
-                self._log_sample_metric(batch_one, "test", num_timesteps=n_steps, post_fix=f"_{n_steps}")
-            self._log_sample_metric(batch_one, "test", num_timesteps=self.num_ode_steps_test)
-        else:
-            # Standard MD17 evaluation
-            for n_steps in self.log_n_steps_ODE_test:
-                self._log_sample_metric(batch_one, "test", num_timesteps=n_steps, post_fix=f"_{n_steps}")
-            self._log_sample_metric(batch_one, "test", num_timesteps=self.num_ode_steps_test)
+        for n_steps, post_fix in self._test_sample_metric_steps():
+            self._log_sample_metric(batch_one, "test", num_timesteps=n_steps, post_fix=post_fix)
             
         return None
 
@@ -3042,26 +3047,6 @@ class LitModel_flow(LitModel):
             import traceback
             logger.error(f"Error trace: {traceback.format_exc()}")
 
-    @staticmethod
-    def _dptb_canonical_prefix(prefix):
-        return "validation" if prefix == "val" else "test"
-
-    @classmethod
-    def _dptb_component_epoch_aliases(cls, prefix, key, num_timesteps):
-        if key not in {"onsite_loss", "hopping_loss"}:
-            return ()
-        canonical_prefix = cls._dptb_canonical_prefix(prefix)
-        aliases = [(f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch", 1)]
-        if num_timesteps == 1:
-            aliases.extend(
-                (
-                    (f"{prefix}/{key}", None),
-                    (f"{prefix}_{key}", None),
-                    (f"{canonical_prefix}_{key}_mean/epoch", 1),
-                )
-            )
-        return aliases
-
     def _log_dptb_compatible_scalar(
         self,
         name,
@@ -3084,28 +3069,24 @@ class LitModel_flow(LitModel):
     def _log_dptb_compatible_component_losses(self, sample, batch_one, prefix, num_timesteps, post_fix):
         if not self.dptb_compatible_monitor or prefix not in {"val", "test"}:
             return
-        if num_timesteps not in self.dptb_compatible_monitor_steps:
-            return
-        if post_fix != f"_{num_timesteps}":
+        if num_timesteps not in self._dptb_required_sample_steps():
             return
 
         metrics = compute_dptb_compatible_component_losses(sample, batch_one)
         for key, value in metrics.items():
-            LitModel_flow._log_dptb_compatible_scalar(
-                self,
-                f"{prefix}/dptb_compatible_{key}_euler{num_timesteps}",
-                value,
-                on_step=True,
-                on_epoch=True,
-            )
-            for alias, batch_size in LitModel_flow._dptb_component_epoch_aliases(
-                prefix, key, num_timesteps
+            for spec in dptb_component_log_specs(
+                prefix,
+                key,
+                num_timesteps,
+                extra_tags=self.dptb_compatible_extra_tags,
             ):
                 LitModel_flow._log_dptb_compatible_scalar(
                     self,
-                    alias,
+                    spec["name"],
                     value,
-                    batch_size=batch_size,
+                    on_step=spec["on_step"],
+                    on_epoch=spec["on_epoch"],
+                    batch_size=spec["batch_size"],
                 )
 
     def _log_sample_metric_qh9_mul(self, batch_one, prefix, num_timesteps=1, post_fix="", mul=5):

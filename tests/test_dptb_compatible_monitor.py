@@ -6,8 +6,13 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from common.dptb_compatible_monitor import compute_dptb_compatible_component_losses
-from pl_module.flow_module import LitModel_flow
+from common.dptb_compatible_monitor import (
+    compute_dptb_compatible_component_losses,
+    dptb_component_log_specs,
+    required_dptb_sample_steps,
+    unique_sample_metric_steps,
+    validation_sample_metric_steps,
+)
 
 
 def test_component_losses_follow_dptb_l1_rmse_formula_with_masks():
@@ -94,90 +99,67 @@ def test_component_losses_support_md17_water_dense_hamiltonian():
 
 
 def test_validation_sample_plan_keeps_only_one_euler_one_forward():
-    assert LitModel_flow._unique_sample_metric_steps([1], 1) == [(1, "_1")]
-    assert LitModel_flow._unique_sample_metric_steps([], 1) == [(1, "")]
-    assert LitModel_flow._unique_sample_metric_steps([1, 3], 1) == [(1, "_1"), (3, "_3")]
+    assert unique_sample_metric_steps([1], 1) == [(1, "_1")]
+    assert unique_sample_metric_steps([], 1) == [(1, "")]
+    assert unique_sample_metric_steps([1, 3], 1) == [(1, "_1"), (3, "_3")]
 
 
-def test_dptb_monitor_steps_are_sampled_for_validation_and_test():
-    val_steps = []
-    test_steps = [2]
-
-    LitModel_flow._ensure_sample_metric_steps(val_steps, [1, 3])
-    LitModel_flow._ensure_sample_metric_steps(test_steps, [1, 2])
-
-    assert val_steps == [1, 3]
-    assert test_steps == [2, 1]
+def test_default_dptb_monitor_requires_only_euler_one_sample():
+    assert required_dptb_sample_steps(True, False, [1, 3]) == [1]
+    assert required_dptb_sample_steps(True, True, [1, 3]) == [1, 3]
+    assert required_dptb_sample_steps(False, True, [1, 3]) == []
 
 
-def test_validation_logger_emits_dptb_style_aliases_for_euler_one():
-    outputs, target, recorder = _make_logger_inputs()
+def test_test_sampling_plan_deduplicates_monitor_and_default_steps():
+    steps = required_dptb_sample_steps(True, False, [1]) + [1]
 
-    LitModel_flow._log_dptb_compatible_component_losses(recorder, outputs, target, "val", 1, "_1")
-
-    record_by_name = {name: kwargs for name, _value, kwargs in recorder.records}
-    assert "val/onsite_loss" in record_by_name
-    assert "val/hopping_loss" in record_by_name
-    assert "val_onsite_loss" in record_by_name
-    assert "val_hopping_loss" in record_by_name
-    assert "val/dptb_compatible_onsite_loss_euler1" in record_by_name
-    assert "val/dptb_compatible_hopping_loss_euler1" in record_by_name
-    assert "validation_compatible_euler_1_onsite_loss_mean/epoch" in record_by_name
-    assert "validation_compatible_euler_1_hopping_loss_mean/epoch" in record_by_name
-    assert "validation_onsite_loss_mean/epoch" in record_by_name
-    assert "validation_hopping_loss_mean/epoch" in record_by_name
-    assert record_by_name["val/onsite_loss"]["on_step"] is False
-    assert record_by_name["val/onsite_loss"]["on_epoch"] is True
-    assert record_by_name["val/hopping_loss"]["on_step"] is False
-    assert record_by_name["val/hopping_loss"]["on_epoch"] is True
-    assert record_by_name["validation_onsite_loss_mean/epoch"]["batch_size"] == 1
-    assert record_by_name["validation_hopping_loss_mean/epoch"]["batch_size"] == 1
+    assert unique_sample_metric_steps(steps, 1) == [(1, "_1")]
 
 
-def test_test_logger_emits_dptb_style_aliases_for_euler_one():
-    outputs, target, recorder = _make_logger_inputs()
-
-    LitModel_flow._log_dptb_compatible_component_losses(recorder, outputs, target, "test", 1, "_1")
-
-    record_by_name = {name: kwargs for name, _value, kwargs in recorder.records}
-    assert "test/onsite_loss" in record_by_name
-    assert "test/hopping_loss" in record_by_name
-    assert "test_onsite_loss" in record_by_name
-    assert "test_hopping_loss" in record_by_name
-    assert "test/dptb_compatible_onsite_loss_euler1" in record_by_name
-    assert "test/dptb_compatible_hopping_loss_euler1" in record_by_name
-    assert "test_compatible_euler_1_onsite_loss_mean/epoch" in record_by_name
-    assert "test_compatible_euler_1_hopping_loss_mean/epoch" in record_by_name
-    assert "test_onsite_loss_mean/epoch" in record_by_name
-    assert "test_hopping_loss_mean/epoch" in record_by_name
-    assert record_by_name["test/onsite_loss"]["on_step"] is False
-    assert record_by_name["test/onsite_loss"]["on_epoch"] is True
-    assert record_by_name["test/hopping_loss"]["on_step"] is False
-    assert record_by_name["test/hopping_loss"]["on_epoch"] is True
-    assert record_by_name["test_onsite_loss_mean/epoch"]["batch_size"] == 1
-    assert record_by_name["test_hopping_loss_mean/epoch"]["batch_size"] == 1
+def test_validation_plan_keeps_euler_one_legacy_sample_above_error_threshold():
+    assert validation_sample_metric_steps(
+        [3],
+        3,
+        threshold_passed=False,
+        legacy_enabled=True,
+    ) == [(1, "_1")]
+    assert validation_sample_metric_steps(
+        [3],
+        3,
+        threshold_passed=False,
+        legacy_enabled=False,
+    ) == []
 
 
-def _make_logger_inputs():
-    class Recorder:
-        dptb_compatible_monitor = True
-        dptb_compatible_monitor_steps = [1]
-        cur_batch_size = 1
+def test_validation_plan_keeps_explicit_extra_steps_when_threshold_passes():
+    steps = required_dptb_sample_steps(True, True, [1, 5]) + [3]
 
-        def __init__(self):
-            self.records = []
+    assert validation_sample_metric_steps(
+        steps,
+        3,
+        threshold_passed=True,
+        legacy_enabled=True,
+    ) == [(1, "_1"), (5, "_5"), (3, "_3")]
 
-        def log(self, name, value, **kwargs):
-            self.records.append((name, value, kwargs))
 
-    outputs = {
-        "hamiltonian_diagonal_blocks": torch.ones(1, 2, 2),
-        "hamiltonian_non_diagonal_blocks": torch.ones(1, 2, 2),
-    }
-    target = SimpleNamespace(
-        diagonal_hamiltonian=torch.zeros(1, 2, 2),
-        diagonal_hamiltonian_mask=torch.ones(1, 2, 2),
-        non_diagonal_hamiltonian=torch.zeros(1, 2, 2),
-        non_diagonal_hamiltonian_mask=torch.ones(1, 2, 2),
+def test_validation_log_specs_match_deeptb_legacy_names_without_extra_tags():
+    onsite_specs = dptb_component_log_specs(
+        "val", "onsite_loss", 1, extra_tags=False
     )
-    return outputs, target, Recorder()
+    hopping_specs = dptb_component_log_specs(
+        "val", "hopping_loss", 1, extra_tags=False
+    )
+    names = {spec["name"] for spec in onsite_specs + hopping_specs}
+
+    assert "validation_onsite_loss_mean/epoch" in names
+    assert "validation_hopping_loss_mean/epoch" in names
+    assert not any("dptb_compatible" in name for name in names)
+    assert not any("compatible_euler" in name for name in names)
+
+
+def test_explicit_extra_tags_preserve_dptb_compatible_names():
+    specs = dptb_component_log_specs("val", "onsite_loss", 1, extra_tags=True)
+    names = {spec["name"] for spec in specs}
+
+    assert "val/dptb_compatible_onsite_loss_euler1" in names
+    assert "validation_compatible_euler_1_onsite_loss_mean/epoch" in names
