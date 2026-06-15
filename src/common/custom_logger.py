@@ -60,20 +60,28 @@ LOG_LEVEL = getattr(logging, CONFIG["log_level"].upper(), logging.INFO)
 # Global logger instance
 _global_logger = None
 
-def setup_global_logger():
-    """Setup global logger once. This should be called at the start of the application."""
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def setup_global_logger(clear_root_handlers: bool | None = None):
+    """Setup QHFlow logger once without mutating caller-owned root handlers."""
     global _global_logger
     
     if _global_logger is not None:
         return _global_logger
     
-    # Clear all existing loggers and handlers to prevent duplication
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-    
-    # Disable propagation to prevent duplicate messages
-    root_logger.propagate = False
+    if clear_root_handlers is None:
+        clear_root_handlers = _env_flag("QHFLOW2_CLEAR_ROOT_LOGGER", default=False)
+    if clear_root_handlers:
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        root_logger.propagate = False
     
     if not ENABLE_LOGGER:
         # When logger is disabled, return basic console logger (no file logging)
