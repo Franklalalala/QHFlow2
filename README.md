@@ -162,6 +162,46 @@ python -m experiment.train_md17 dataset=ethanol wandb.mode=online
 python -m experiment.train_qh9 dataset=QH9Stable dataset.split=random wandb.mode=online
 ```
 
+**Pixel MeanFlow smoke fragments:**
+
+```yaml
+# MD17 paper-conservative pMF
+pl_type: pixel_meanflow
+flow:
+  num_ode_steps_val: 1
+  num_ode_steps_test: 1
+  pixel_meanflow:
+    profile: conservative
+    jvp_tangent: boundary
+    time_sampling: logit_normal
+    p_mean: -0.4
+    p_std: 1.0
+    data_proportion: 0.5
+    tr_uniform_prob: 0.1
+    min_t: 0.05
+    aux_endpoint_weight: 0.05
+    aux_boundary_v_weight: 0.0
+    norm_p: 0.0
+    time_conditioning: trh
+```
+
+```yaml
+# QH9 paper-conservative pMF keeps off-diagonal endpoint supervision on.
+pl_type: pixel_meanflow
+flow:
+  num_ode_steps_val: 1
+  num_ode_steps_test: 1
+  pixel_meanflow:
+    profile: conservative
+    jvp_tangent: boundary
+    aux_endpoint_weight: 0.05
+    aux_boundary_v_weight: 0.0
+    aux_nondiag_endpoint_weight: 1.0
+    original_criterion_weight: 0.0
+    norm_p: 0.0
+    time_conditioning: trh
+```
+
 ### Prediction (Saving the Output)
 
 This mode is used to predict test files and save individual Hamiltonian matrices for each sample. The predictions are saved to disk for further analysis.
