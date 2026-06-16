@@ -25,8 +25,9 @@ def unique_sample_metric_steps(log_steps, default_step):
 def required_dptb_sample_steps(legacy_enabled, extra_tags, monitor_steps):
     """Sampling steps needed only for DPTB-compatible TensorBoard logging.
 
-    The default contract keeps Euler-1 DPTB-compatible onsite/hopping aliases
-    available. Extra tags only request additional monitor steps.
+    The default contract keeps Euler-1 DPTB-style validation/test component
+    tags available. Extra tags request additional monitor steps and legacy
+    QHFlow-style aliases.
     """
     if not legacy_enabled:
         return []
@@ -59,7 +60,7 @@ def dptb_component_log_specs(prefix, key, num_timesteps, *, extra_tags=False):
     """Return TensorBoard log specs for a DPTB-compatible scalar."""
     specs = []
     is_component_loss = key in {"onsite_loss", "hopping_loss"}
-    if extra_tags or is_component_loss:
+    if extra_tags:
         specs.append(
             {
                 "name": f"{prefix}/dptb_compatible_{key}_euler{num_timesteps}",
@@ -72,36 +73,40 @@ def dptb_component_log_specs(prefix, key, num_timesteps, *, extra_tags=False):
         return specs
 
     canonical_prefix = "validation" if prefix == "val" else "test"
-    specs.append(
-        {
-            "name": f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch",
-            "on_step": False,
-            "on_epoch": True,
-            "batch_size": 1,
-        }
-    )
+    if extra_tags:
+        specs.append(
+            {
+                "name": f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}",
+                "on_step": False,
+                "on_epoch": True,
+                "batch_size": 1,
+            }
+        )
     if int(num_timesteps) == 1:
-        specs.extend(
-            [
-                {
-                    "name": f"{prefix}/{key}",
-                    "on_step": False,
-                    "on_epoch": True,
-                    "batch_size": None,
-                },
-                {
-                    "name": f"{prefix}_{key}",
-                    "on_step": False,
-                    "on_epoch": True,
-                    "batch_size": None,
-                },
-                {
-                    "name": f"{canonical_prefix}_{key}_mean/epoch",
-                    "on_step": False,
-                    "on_epoch": True,
-                    "batch_size": 1,
-                },
-            ]
+        if extra_tags:
+            specs.extend(
+                [
+                    {
+                        "name": f"{prefix}/{key}",
+                        "on_step": False,
+                        "on_epoch": True,
+                        "batch_size": None,
+                    },
+                    {
+                        "name": f"{prefix}_{key}",
+                        "on_step": False,
+                        "on_epoch": True,
+                        "batch_size": None,
+                    },
+                ]
+            )
+        specs.append(
+            {
+                "name": f"{canonical_prefix}_{key}",
+                "on_step": False,
+                "on_epoch": True,
+                "batch_size": 1,
+            }
         )
     return specs
 
