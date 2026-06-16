@@ -25,8 +25,8 @@ def unique_sample_metric_steps(log_steps, default_step):
 def required_dptb_sample_steps(legacy_enabled, extra_tags, monitor_steps):
     """Sampling steps needed only for DPTB-compatible TensorBoard logging.
 
-    The default contract is intentionally narrow: keep Euler-1 legacy
-    onsite/hopping aliases available, but do not force extra compatible tags.
+    The default contract keeps Euler-1 DPTB-compatible onsite/hopping aliases
+    available. Extra tags only request additional monitor steps.
     """
     if not legacy_enabled:
         return []
@@ -58,7 +58,8 @@ def validation_sample_metric_steps(log_steps, default_step, *, threshold_passed,
 def dptb_component_log_specs(prefix, key, num_timesteps, *, extra_tags=False):
     """Return TensorBoard log specs for a DPTB-compatible scalar."""
     specs = []
-    if extra_tags:
+    is_component_loss = key in {"onsite_loss", "hopping_loss"}
+    if extra_tags or is_component_loss:
         specs.append(
             {
                 "name": f"{prefix}/dptb_compatible_{key}_euler{num_timesteps}",
@@ -67,19 +68,18 @@ def dptb_component_log_specs(prefix, key, num_timesteps, *, extra_tags=False):
                 "batch_size": None,
             }
         )
-    if key not in {"onsite_loss", "hopping_loss"}:
+    if not is_component_loss:
         return specs
 
     canonical_prefix = "validation" if prefix == "val" else "test"
-    if extra_tags:
-        specs.append(
-            {
-                "name": f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch",
-                "on_step": False,
-                "on_epoch": True,
-                "batch_size": 1,
-            }
-        )
+    specs.append(
+        {
+            "name": f"{canonical_prefix}_compatible_euler_{num_timesteps}_{key}_mean/epoch",
+            "on_step": False,
+            "on_epoch": True,
+            "batch_size": 1,
+        }
+    )
     if int(num_timesteps) == 1:
         specs.extend(
             [

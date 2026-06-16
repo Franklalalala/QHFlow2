@@ -142,7 +142,7 @@ def test_validation_plan_keeps_explicit_extra_steps_when_threshold_passes():
     ) == [(1, "_1"), (5, "_5"), (3, "_3")]
 
 
-def test_validation_log_specs_match_deeptb_legacy_names_without_extra_tags():
+def test_validation_log_specs_match_deeptb_and_canonical_names_by_default():
     onsite_specs = dptb_component_log_specs(
         "val", "onsite_loss", 1, extra_tags=False
     )
@@ -151,10 +151,24 @@ def test_validation_log_specs_match_deeptb_legacy_names_without_extra_tags():
     )
     names = {spec["name"] for spec in onsite_specs + hopping_specs}
 
+    assert "val/onsite_loss" in names
+    assert "val/hopping_loss" in names
+    assert "val_onsite_loss" in names
+    assert "val_hopping_loss" in names
     assert "validation_onsite_loss_mean/epoch" in names
     assert "validation_hopping_loss_mean/epoch" in names
-    assert not any("dptb_compatible" in name for name in names)
-    assert not any("compatible_euler" in name for name in names)
+    assert "val/dptb_compatible_onsite_loss_euler1" in names
+    assert "val/dptb_compatible_hopping_loss_euler1" in names
+    assert "validation_compatible_euler_1_onsite_loss_mean/epoch" in names
+    assert "validation_compatible_euler_1_hopping_loss_mean/epoch" in names
+
+
+def test_test_log_specs_match_deeptb_canonical_names_by_default():
+    specs = dptb_component_log_specs("test", "onsite_loss", 1, extra_tags=False)
+    names = {spec["name"] for spec in specs}
+
+    assert "test_onsite_loss_mean/epoch" in names
+    assert "test_compatible_euler_1_onsite_loss_mean/epoch" in names
 
 
 def test_explicit_extra_tags_preserve_dptb_compatible_names():
