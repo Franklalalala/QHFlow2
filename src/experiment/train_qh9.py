@@ -65,7 +65,7 @@ def main(conf):
     setup_tensor_type_and_seed(conf)
 
     # Load the dataset
-    root_path = get_root_path()
+    root_path = get_root_path(conf)
     dataset = load_qh9_dataset(conf, root_path)
     
     # Create data loaders

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
 import sys
 from typing import TYPE_CHECKING, Literal
 
@@ -41,7 +42,7 @@ from fairchem.core.models.uma.nn.layer_norm import (
     get_normalization_layer,
 )
 from fairchem.core.models.uma.nn.mole_utils import MOLEInterface
-from fairchem.core.models.uma.nn.radial import GaussianSmearing
+from fairchem.core.models.uma.nn.radial import GaussianSmearing, PolynomialEnvelope
 from fairchem.core.models.uma.nn.so3_layers import SO3_Linear
 from fairchem.core.models.utils.irreps import cg_change_mat, irreps_sum
 
@@ -245,17 +246,25 @@ class eSCNMDBackbone_ham(nn.Module, MOLEInterface):
             self.edge_channels,
         ]
 
-        self.edge_degree_embedding = EdgeDegreeEmbedding(
-            sphere_channels=self.sphere_channels,
-            lmax=self.lmax,
-            mmax=self.mmax,
-            max_num_elements=self.max_num_elements,
-            edge_channels_list=self.edge_channels_list,
-            rescale_factor=5.0,  # NOTE: sqrt avg degree
-            cutoff=self.cutoff,
-            mappingReduced=self.mappingReduced,
-            activation_checkpoint_chunk_size=activation_checkpoint_chunk_size,
-        )
+        edge_degree_init_params = inspect.signature(EdgeDegreeEmbedding.__init__).parameters
+        edge_degree_kwargs = {
+            "sphere_channels": self.sphere_channels,
+            "lmax": self.lmax,
+            "mmax": self.mmax,
+            "edge_channels_list": self.edge_channels_list,
+            "rescale_factor": 5.0,  # NOTE: sqrt avg degree
+            "mappingReduced": self.mappingReduced,
+            "activation_checkpoint_chunk_size": activation_checkpoint_chunk_size,
+        }
+        if "max_num_elements" in edge_degree_init_params:
+            edge_degree_kwargs["max_num_elements"] = self.max_num_elements
+        if "cutoff" in edge_degree_init_params:
+            edge_degree_kwargs["cutoff"] = self.cutoff
+        self.edge_degree_embedding = EdgeDegreeEmbedding(**edge_degree_kwargs)
+        edge_degree_forward_params = inspect.signature(EdgeDegreeEmbedding.forward).parameters
+        self._edge_degree_forward_uses_distance = "edge_distance" in edge_degree_forward_params
+        if not self._edge_degree_forward_uses_distance:
+            self.edge_degree_envelope = PolynomialEnvelope(exponent=5)
 
         self.num_layers = num_layers
         self.hidden_channels = hidden_channels
@@ -620,14 +629,27 @@ class eSCNMDBackbone_ham(nn.Module, MOLEInterface):
             x_edge = torch.cat(
                 (edge_distance_embedding, source_embedding, target_embedding), dim=1
             )
-            x_message = self.edge_degree_embedding(
-                x_message,
-                x_edge,
-                graph_dict["edge_distance"],
-                graph_dict["edge_index"],
-                wigner_and_M_mapping_inv,
-                graph_dict["node_offset"],
-            )
+            if self._edge_degree_forward_uses_distance:
+                x_message = self.edge_degree_embedding(
+                    x_message,
+                    x_edge,
+                    graph_dict["edge_distance"],
+                    graph_dict["edge_index"],
+                    wigner_and_M_mapping_inv,
+                    graph_dict["node_offset"],
+                )
+            else:
+                edge_degree_envelope = self.edge_degree_envelope(
+                    graph_dict["edge_distance"] / self.cutoff
+                ).view(-1, 1, 1)
+                x_message = self.edge_degree_embedding(
+                    x_message,
+                    x_edge,
+                    graph_dict["edge_index"],
+                    wigner_and_M_mapping_inv,
+                    edge_degree_envelope,
+                    graph_dict["node_offset"],
+                )
 
         ###############################################################
         # Update spherical node embeddings

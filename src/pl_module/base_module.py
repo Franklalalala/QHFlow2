@@ -610,21 +610,22 @@ class LitModel(pl.LightningModule):
     @staticmethod
     def post_processing(batch, default_type):
         """Post-process batch data to ensure correct tensor shapes and types."""
-        if "hamiltonian" in batch.keys:
+        batch_keys = batch.keys() if callable(batch.keys) else batch.keys
+        if "hamiltonian" in batch_keys:
             if batch.hamiltonian.dim() == 2:
                 batch.hamiltonian = batch.hamiltonian.view(
                     batch.hamiltonian.shape[0] // batch.hamiltonian.shape[1],
                     batch.hamiltonian.shape[1],
                     batch.hamiltonian.shape[1],
                 )
-        if "overlap" in batch.keys:
+        if "overlap" in batch_keys:
             if batch.overlap.dim() == 2:
                 batch.overlap = batch.overlap.view(
                     batch.overlap.shape[0] // batch.overlap.shape[1],
                     batch.overlap.shape[1],
                     batch.overlap.shape[1],
                 )
-        for key in batch.keys:
+        for key in batch_keys:
             if type(batch[key]) == torch.Tensor:
                 if torch.is_floating_point(batch[key]):
                     batch[key] = batch[key].type(default_type)

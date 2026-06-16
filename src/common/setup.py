@@ -30,6 +30,7 @@ MODE_DICT = {
 DEFAULT_ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..",".."))
 # Ex: /mnt/QHFlow/src
 DEFAULT_SRC_PATH  = os.path.join(DEFAULT_ROOT_PATH, "src")
+DEFAULT_DATASET_PATH = DEFAULT_ROOT_PATH
 
 def setup_paths(src_path: str=None):
     """Setup Python path and get src directory."""
@@ -67,9 +68,20 @@ def setup_tensor_type_and_seed(conf: DictConfig):
     pl.seed_everything(seed)
 
 
+def _empty_path(value):
+    return value is None or str(value).strip() in {"", "None", "none", "null"}
+
+
 def get_dataset_path(conf: DictConfig=None):
     """Get the root path for dataset loading."""
-    data_path = DEFAULT_ROOT_PATH if conf is None else conf.get("dataset_path", DEFAULT_DATASET_PATH)
+    data_path = None
+    if conf is not None:
+        data_path = conf.get("dataset_path", None)
+        if _empty_path(data_path) and conf.get("dataset", None) is not None:
+            data_path = conf.dataset.get("dataset_path", None)
+    if _empty_path(data_path):
+        data_path = os.environ.get("QHFLOW2_DATASET_PATH", DEFAULT_DATASET_PATH)
+    data_path = os.path.abspath(os.path.expanduser(str(data_path)))
     logger.info(f"Dataset path: {data_path}")
     if not os.path.exists(data_path):
         logger.error(f"Dataset path {data_path} does not exist")

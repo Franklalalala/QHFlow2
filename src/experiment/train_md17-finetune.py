@@ -43,7 +43,7 @@ def main(conf):
     setup_tensor_type_and_seed(conf)
 
     # Load the dataset
-    root_path = get_root_path()
+    root_path = get_root_path(conf)
     logger.info(f"Loading {conf.dataset.dataset_name} dataset...")
     
     dataset = load_md17_dataset(conf, root_path)

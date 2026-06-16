@@ -4,10 +4,28 @@ from torch import Tensor
 from torch_geometric.data import Data
 from pyscf import gto
 from typing import Optional, List
-from tqdm.rich import tqdm
+try:
+    from tqdm.rich import tqdm
+except ModuleNotFoundError:
+    from tqdm import tqdm
 from copy import deepcopy
 from ase.data import chemical_symbols, atomic_numbers
-import psi4
+psi4 = None
+
+
+def _require_psi4():
+    global psi4
+    if psi4 is None:
+        try:
+            import psi4 as _psi4
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "psi4 is required only for auxiliary integral generation; "
+                "preprocessed MD17/QHFlow training can run without it."
+            ) from exc
+        psi4 = _psi4
+    return psi4
+
 from e3nn import o3
 from torch import nn
 import time
@@ -463,6 +481,7 @@ class Onsite_3idx_Overlap_Integral:
         self.basis = basis
 
     def calc_Q(self, atom: str):
+        psi4 = _require_psi4()
         psi4.core.be_quiet()
 
         # NOTE: prevent Psi4 from moving the molecule in space.
